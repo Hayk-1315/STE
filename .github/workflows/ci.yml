@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -27,8 +27,8 @@ jobs:
       - name: Setup Node (LTS)
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
-          cache: 'pnpm'
+          node-version: "22"
+          cache: "pnpm"
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Install deps (frozen lockfile)
@@ -45,4 +45,3 @@ jobs:
 
       - name: Build
         run: pnpm -r build
-

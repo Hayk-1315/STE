@@ -16,6 +16,7 @@
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
     "lint": "eslint \"{src,tests}/**/*.{ts,tsx}\" --max-warnings=0",
+    "lint:fix": "eslint \"{src,tests}/**/*.{ts,tsx}\" --fix",
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
     "test": "jest --passWithNoTests",
     "test:watch": "jest --watch",

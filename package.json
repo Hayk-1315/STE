@@ -2,12 +2,15 @@
   "name": "ste",
   "private": true,
   "version": "0.0.0",
-  "engines": { "node": ">=22 <23" },
+  "engines": {
+    "node": ">=22 <23"
+  },
   "packageManager": "pnpm@9.0.0",
   "scripts": {
     "dev": "pnpm -r --parallel dev",
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
+    "lint-staged": "lint-staged",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "db:up": "docker compose up -d postgres",
@@ -15,6 +18,19 @@
     "db:logs": "docker logs -f ste_postgres",
     "db:psql": "docker exec -it ste_postgres psql -U ste -d ste",
     "api:dev": "pnpm --filter ./apps/api start:dev",
-    "web:dev": "pnpm --filter ./apps/web dev"
+    "web:dev": "pnpm --filter ./apps/web dev",
+    "format": "prettier -w \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\"",
+    "format:check": "prettier -c \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\"",
+    "prepare": "husky install"
+  },
+  "lint-staged": {
+    "apps/web/**/*.{ts,tsx,js,jsx}": "pnpm --filter ./apps/web exec eslint --fix --",
+    "apps/api/src/**/*.{ts,tsx}": "pnpm --filter ./apps/api exec eslint --fix --",
+    "*.{json,md,yml,yaml}": "pnpm exec prettier -w"
+  },
+  "devDependencies": {
+    "husky": "^8.0.0",
+    "lint-staged": "16.2.6",
+    "prettier": "^3.6.2"
   }
 }
