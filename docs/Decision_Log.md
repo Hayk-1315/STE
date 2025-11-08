@@ -1,4 +1,5 @@
 # Decision Log
-- 2025-11-06: Aceptamos riesgo temporal: GitHub rulesets no-enforced en repo privado personal.
-  Motivo: UI nueva de GitHub; no bloquea flujo. Mitigación: disciplina PR + CI checks al montar.
-- 2025-11-06: Monorepo pnpm con apps/web (Next.js) y apps/api (NestJS) conforme a scope F0.
+- 2025-11-06: Accepted temporary risk: GitHub rulesets are not enforced in a personal private repo.
+  Reason: new GitHub UI; it does not block our workflow. Mitigation: PR discipline + CI checks once configured.
+- 2025-11-06: Monorepo with pnpm; apps/web (Next.js) and apps/api (NestJS) per scope F0.
+
