@@ -9,6 +9,12 @@
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "db:logs": "docker logs -f ste_postgres",
+    "db:psql": "docker exec -it ste_postgres psql -U ste -d ste",
+    "api:dev": "pnpm --filter ./apps/api start:dev",
+    "web:dev": "pnpm --filter ./apps/web dev"
   }
 }

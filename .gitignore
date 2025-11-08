@@ -3,4 +3,6 @@ dist
 .next
 .env
 .env.*
+**/.env
+**/.env.*
 pnpm-lock.yaml

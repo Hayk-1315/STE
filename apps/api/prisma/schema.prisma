@@ -1,0 +1,19 @@
+// Prisma schema for STE API (Postgres)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL") // Read from project root .env
+}
+
+model Market {
+  id        String   @id @default(cuid())
+  base      String
+  quote     String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  @@unique([base, quote])
+}
