@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node (LTS)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Enable Corepack and pin pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.0.0 --activate
+          pnpm -v
+
+      - name: Install deps (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm -r lint
+
+      - name: Typecheck
+        run: pnpm -r typecheck
+
+      - name: Unit tests
+        run: pnpm -r test --if-present
+
+      - name: Build
+        run: pnpm -r build
