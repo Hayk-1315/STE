@@ -5,11 +5,12 @@ import { loadEnv } from './config/env';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // Validate env at startup (typed via Zod)
+  // Read validated environment (typed)
   const env = loadEnv();
-  
-  // Use env PORT when available; default to 3001 to avoid Next.js conflict
-  const port = process.env.PORT ? Number(process.env.PORT) : 3001;
-  await app.listen(port);
+
+  // Listen on typed PORT (default handled by schema)
+  await app.listen(env.PORT);
 }
-bootstrap();
+
+// Explicitly mark the top-level async call
+void bootstrap();

@@ -7,19 +7,32 @@ dotenvConfig({ path: path.resolve(process.cwd(), '..', '..', '.env') });
 import { z } from 'zod';
 
 const EnvSchema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  NODE_ENV: z
+    .enum(['development', 'test', 'production'])
+    .default('development'),
   PORT: z.coerce.number().int().positive().default(3001),
-  DATABASE_URL: z.string().url()
+  DATABASE_URL: z.string().refine(
+    (v) => {
+      try {
+        const u = new URL(v);
+        return u.protocol === 'postgresql:' || u.protocol === 'postgres:';
+      } catch {
+        return false;
+      }
+    },
+    { message: 'DATABASE_URL must be a valid postgres URL (postgresql://...)' },
+  ),
 });
 
 export type AppEnv = z.infer<typeof EnvSchema>;
 
 export function loadEnv(): AppEnv {
-  // Validate and return a typed env object
   const parsed = EnvSchema.safeParse(process.env);
   if (!parsed.success) {
-    // eslint-disable-next-line no-console
-    console.error(parsed.error.format());
+    // Use the new helper to avoid deprecated .format()
+    const tree = z.treeifyError(parsed.error);
+    // Keep logs helpful for CI while avoiding secrets
+    console.error(JSON.stringify(tree, null, 2));
     throw new Error('Invalid environment variables');
   }
   return parsed.data;
