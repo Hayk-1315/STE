@@ -1,4 +1,9 @@
 // apps/api/src/config/env.ts
+import path from 'node:path';
+import { config as dotenvConfig } from 'dotenv';
+// Load root .env from the monorepo (apps/api -> ../.. -> .env)
+dotenvConfig({ path: path.resolve(process.cwd(), '..', '..', '.env') });
+
 import { z } from 'zod';
 
 const EnvSchema = z.object({
