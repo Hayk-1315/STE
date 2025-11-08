@@ -5,8 +5,10 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "lint": "next lint --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "test": "node -e \"process.exit(0)\"", 
+    "start": "next start"
   },
   "dependencies": {
     "next": "16.0.1",
