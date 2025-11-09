@@ -17,39 +17,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Install pnpm BEFORE setup-node so caching works and no "pnpm not found" error
-      - name: Setup pnpm
+      - name: Setup Node (LTS)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+          cache: pnpm
+
+      - name: Setup pnpm (use packageManager)
         uses: pnpm/action-setup@v4
         with:
           run_install: false
 
-      - name: Setup Node (LTS)
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "pnpm"
-          cache-dependency-path: pnpm-lock.yaml
+      - name: Show versions
+        run: |
+          node -v
+          pnpm -v
 
       - name: Install deps (frozen lockfile)
         run: pnpm install --frozen-lockfile
 
       - name: Lint
-        run: pnpm -r lint
+        run: pnpm -r --if-present lint
 
       - name: Typecheck
-        run: pnpm -r typecheck
+        run: pnpm -r --if-present typecheck
 
       - name: Unit tests
         run: pnpm -r --if-present test
 
       - name: Build
-        run: pnpm -r build
-
-      - name: Enable Corepack
-        run: corepack enable
-
-      - name: Use pinned pnpm
-        run: corepack use
-
-      - name: Install
-        run: pnpm install --frozen-lockfile
+        run: pnpm -r --if-present build
