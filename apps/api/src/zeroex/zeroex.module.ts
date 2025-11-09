@@ -21,6 +21,7 @@ import { parseZeroExEnv, ZeroExConfig } from './zeroex.config';
     ZeroExTxBuildersService,
   ],
   exports: [
+    'ZEROEX_CONFIG',
     ZeroExAddressesService,
     ZeroExSigningService,
     ZeroExTxBuildersService,
