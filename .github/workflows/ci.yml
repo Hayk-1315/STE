@@ -45,3 +45,12 @@ jobs:
 
       - name: Build
         run: pnpm -r build
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Use pinned pnpm
+        run: corepack use
+
+      - name: Install
+        run: pnpm install --frozen-lockfile

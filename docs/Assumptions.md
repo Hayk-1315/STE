@@ -8,3 +8,5 @@
 - CI: GitHub Actions with gates (lint → typecheck → test → build).
 - Dependency updates: Renovate weekly (no automerge), CI must pass.
 - Lockfile tracked in VCS (pnpm-lock.yaml).
+- Allowance target (spender): default to Permit2/AllowanceHolder (configurable via .env). Verify during E2E and before go-live.
+- Exchange Proxy: resolve via @0x/contract-addresses when available; otherwise mandatory to set in .env.

@@ -1,0 +1,60 @@
+{
+  "chain": "base-mainnet",
+  "markets": [
+    {
+      "symbol": "WETH/USDC",
+      "baseToken": {
+        "address": "0xBASE_WETH_ADDRESS_TBD",
+        "symbol": "WETH",
+        "decimals": 18
+      },
+      "quoteToken": {
+        "address": "0xBASE_USDC_ADDRESS_TBD",
+        "symbol": "USDC",
+        "decimals": 6
+      },
+      "tradingRules": {
+        "minNotional": "10",
+        "minSize": "0.001",
+        "priceTick": "0.01"
+      }
+    },
+    {
+      "symbol": "SKY/USDC",
+      "baseToken": {
+        "address": "0xBASE_SKY_ADDRESS_TBD",
+        "symbol": "SKY",
+        "decimals": 18
+      },
+      "quoteToken": {
+        "address": "0xBASE_USDC_ADDRESS_TBD",
+        "symbol": "USDC",
+        "decimals": 6
+      },
+      "tradingRules": {
+        "minNotional": "10",
+        "minSize": "1",
+        "priceTick": "0.0001"
+      }
+    },
+    {
+      "symbol": "TBD/USDC",
+      "baseToken": {
+        "address": "0xBASE_TBD_ADDRESS_TBD",
+        "symbol": "TBD",
+        "decimals": 18
+      },
+      "quoteToken": {
+        "address": "0xBASE_USDC_ADDRESS_TBD",
+        "symbol": "USDC",
+        "decimals": 6
+      },
+      "tradingRules": {
+        "minNotional": "10",
+        "minSize": "1",
+        "priceTick": "0.01"
+      }
+    }
+  ],
+  "routing": { "dynamicRouteEnabled": true }
+}
