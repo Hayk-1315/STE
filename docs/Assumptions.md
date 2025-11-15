@@ -10,3 +10,15 @@
 - Lockfile tracked in VCS (pnpm-lock.yaml).
 - Allowance target (spender): default to Permit2/AllowanceHolder (configurable via .env). Verify during E2E and before go-live.
 - Exchange Proxy: resolve via @0x/contract-addresses when available; otherwise mandatory to set in .env.
+- Network defaults (dev): Base Sepolia (CHAIN_ID=84532, RPC_URL_READONLY=https://sepolia.base.org). Can be overridden via .env.
+- Database URL: Read from the monorepo root .env only (DATABASE_URL=postgresql://ste:ste@localhost:5432/ste?schema=public).
+- Order book keying: The in-memory LOB is keyed by market symbol (e.g., WETH-USDC), while persistence references the DB market ID. Mapping is done at the controller/ repository boundary.
+- Numerics: All amounts are integers in smallest units. Prices are expressed as ticks (priceTicks \* priceTickQ / 10^quoteDecimals).
+- Trading rules enforcement: minSizeB, minNotionalQ, and priceTickQ are enforced server-side in F2 within OrderBookService using values loaded from DB (markets seeded from apps/api/config/markets.json).
+- Persistence scope (F2): Append-only order_events, orders.remainingBase decrements on fills, and trades records created on market execution. Settlement tx hash is optional and may be populated in F3+.
+- Snapshots: 1 Hz cron captures top-25 L2 from the in-memory book and stores in book_snapshots with the DB marketId.
+- Dev endpoints: /dev/engine/sanity, /place, /market, /cancel, and /snapshot exist only in non-prod and will be removed or hidden in F3 once the public REST/WS is exposed.
+- Idempotency: Order.orderHash is the primary key; place cancels/replaces any existing in-memory order with the same hash before insertion.
+- Security/compliance: EIP-712 signing remains client-side; server only verifies and builds 0x tx in later phases. No private keys on server.
+- Dependencies: @nestjs/schedule used for cron; Prisma client pinned to match Prisma CLI version; Node LTS + pnpm + strict TS.
+- Logging & errors: Dev routes return 400 for missing fields (light validation); otherwise errors bubble up with minimal details in non-prod only.

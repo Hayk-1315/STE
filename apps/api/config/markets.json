@@ -1,0 +1,47 @@
+{
+  "chain": "base-sepolia",
+  "markets": [
+    {
+      "symbol": "WETH-USDC",
+      "baseToken": { "address": "0xBase...", "symbol": "WETH", "decimals": 18 },
+      "quoteToken": {
+        "address": "0xQuote...",
+        "symbol": "USDC",
+        "decimals": 6
+      },
+      "tradingRules": {
+        "minNotional": "5",
+        "minSize": "0.001",
+        "priceTick": "0.01"
+      }
+    },
+    {
+      "symbol": "WBTC-USDC",
+      "baseToken": { "address": "0xBase...", "symbol": "WBTC", "decimals": 8 },
+      "quoteToken": {
+        "address": "0xQuote...",
+        "symbol": "USDC",
+        "decimals": 6
+      },
+      "tradingRules": {
+        "minNotional": "10",
+        "minSize": "0.0001",
+        "priceTick": "0.1"
+      }
+    },
+    {
+      "symbol": "WETH-WBTC",
+      "baseToken": { "address": "0xBase...", "symbol": "WETH", "decimals": 18 },
+      "quoteToken": {
+        "address": "0xQuote...",
+        "symbol": "WBTC",
+        "decimals": 8
+      },
+      "tradingRules": {
+        "minNotional": "0.0005",
+        "minSize": "0.001",
+        "priceTick": "0.0001"
+      }
+    }
+  ]
+}

@@ -1,4 +1,5 @@
-// Prisma schema for STE API (Postgres)
+// prisma/schema.prisma
+// Postgres schema for STE F2 (event-sourced matching + snapshots)
 
 generator client {
   provider = "prisma-client-js"
@@ -6,14 +7,133 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL") // Read from project root .env
+  url      = env("DATABASE_URL")
+}
+
+enum OrderSide {
+  BUY
+  SELL
+}
+
+enum OrderStatus {
+  PLACED
+  PARTIALLY_FILLED
+  FILLED
+  CANCELLED
+  EXPIRED
+}
+
+enum EventType {
+  PLACED
+  PARTIAL_FILL
+  FILLED
+  CANCELLED
+  EXPIRED
+}
+
+model Token {
+  id        String  @id @default(cuid())
+  address   String  @unique @db.VarChar(42)
+  symbol    String
+  decimals  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  baseMarkets  Market[] @relation("BaseToken")
+  quoteMarkets Market[] @relation("QuoteToken")
 }
 
 model Market {
-  id        String   @id @default(cuid())
-  base      String
-  quote     String
-  active    Boolean  @default(true)
+  id            String @id @default(cuid())
+  symbol        String @unique
+  baseToken     Token  @relation("BaseToken", fields: [baseTokenId], references: [id])
+  baseTokenId   String
+  quoteToken    Token  @relation("QuoteToken", fields: [quoteTokenId], references: [id])
+  quoteTokenId  String
+
+  // Trading rules persisted in smallest units to avoid FP.
+  minNotionalQ  Decimal @db.Decimal(78,0) // quote smallest units (e.g., USDC 6dp)
+  minSizeB      Decimal @db.Decimal(78,0) // base smallest units
+  priceTickQ    Decimal @db.Decimal(78,0) // quote smallest units per 1 base unit tick
+
   createdAt DateTime @default(now())
-  @@unique([base, quote])
+  updatedAt DateTime @updatedAt
+
+  orders        Order[]
+  trades        Trade[]
+  events        OrderEvent[]
+  snapshots     BookSnapshot[]
+}
+
+model Order {
+  // 0x orderHash (keccak) as primary id for idempotency
+  orderHash     String   @id
+  market        Market   @relation(fields: [marketId], references: [id])
+  marketId      String
+
+  maker         String   @db.VarChar(42)
+  side          OrderSide
+  // Price is represented in ticks implied by Market.priceTickQ
+  priceTicks    BigInt   // price = priceTicks * priceTickQ / 10^quoteDecimals
+  // Amounts in smallest units
+  sizeBase      Decimal  @db.Decimal(78,0)
+  remainingBase Decimal  @db.Decimal(78,0)
+
+  status        OrderStatus @default(PLACED)
+  expiry        BigInt      // unix seconds
+  salt          String
+
+  // 0x typed data payloads for settlement
+  zeroExOrder   Json
+  signature     Bytes
+
+  placedAt      DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([marketId, status])
+  @@index([maker])
+}
+
+model Trade {
+  id           BigInt  @id @default(autoincrement())
+  market       Market  @relation(fields: [marketId], references: [id])
+  marketId     String
+
+  makerOrderHash String
+  taker          String @db.VarChar(42)
+  // Executed price/size (ticks + base units)
+  priceTicks   BigInt
+  sizeBase     Decimal @db.Decimal(78,0)
+
+  // On-chain tx hash is optional in F2 (filled later on settlement)
+  txHash      String? @db.VarChar(66)
+
+  ts          DateTime @default(now())
+
+  @@index([marketId, ts])
+}
+
+model OrderEvent {
+  id         BigInt @id @default(autoincrement())
+  market     Market @relation(fields: [marketId], references: [id])
+  marketId   String
+  orderHash  String
+  type       EventType
+  payload    Json
+  ts         DateTime @default(now())
+
+  @@index([marketId, ts])
+  @@index([orderHash, ts])
+}
+
+model BookSnapshot {
+  id        BigInt @id @default(autoincrement())
+  market    Market @relation(fields: [marketId], references: [id])
+  marketId  String
+  // Aggregated ladders (top N by config)
+  bids      Json
+  asks      Json
+  ts        DateTime @default(now())
+
+  @@index([marketId, ts])
 }

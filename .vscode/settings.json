@@ -1,7 +1,28 @@
 {
-  "editor.formatOnSave": true,
-  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  // Use workspace TypeScript (keeps versions consistent with repo)
+  "typescript.tsdk": "node_modules/typescript/lib",
+
+  // Let ESLint handle fixes on save
   "editor.codeActionsOnSave": {
     "source.fixAll.eslint": "explicit"
-  }
+  },
+
+  // Validate TS/TSX with ESLint
+  "eslint.validate": [
+    "javascript",
+    "javascriptreact",
+    "typescript",
+    "typescriptreact"
+  ],
+
+  // Monorepo awareness: let ESLint resolve configs per package
+  "eslint.workingDirectories": [
+    { "mode": "auto" },
+    "apps/api",
+    "apps/web"
+  ],
+
+  // Optional: avoid conflicting formatters
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.formatOnSave": true
 }
