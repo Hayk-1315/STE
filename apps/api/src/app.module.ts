@@ -3,16 +3,23 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { ZeroExModule } from './zeroex/zeroex.module';
 import { DevModule } from './dev/dev.module';
+import { EngineModule } from './dev/engine.module';
+import { MatchingModule } from './matching/matching.module';
+import { ScheduleModule } from '@nestjs/schedule';
 
-const controllersOrImports = [ZeroExModule];
+const imports: any[] = [ZeroExModule, MatchingModule];
 if (process.env.NODE_ENV !== 'production') {
-  controllersOrImports.push(DevModule);
+  imports.push(DevModule, EngineModule);
 }
 
 @Module({
-  //imports: [],
+  imports: [
+    ScheduleModule.forRoot(),
+    MatchingModule,
+    EngineModule,
+    // ZeroExModule, DevModule, ...
+  ],
   controllers: [AppController],
   providers: [AppService],
-  imports: controllersOrImports,
 })
 export class AppModule {}

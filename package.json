@@ -21,7 +21,9 @@
     "web:dev": "pnpm --filter ./apps/web dev",
     "format": "prettier -w \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\"",
     "format:check": "prettier -c \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\"",
-    "prepare": "husky install"
+    "prepare": "husky install",
+    "ci:local": "pnpm install --frozen-lockfile && pnpm -r --if-present lint && pnpm -r --if-present typecheck && pnpm -r --if-present test && pnpm -r --if-present build",
+    "ci:local:api": "pnpm --filter ./apps/api install --frozen-lockfile && pnpm -r --filter ./apps/api --if-present lint && pnpm -r --filter ./apps/api --if-present typecheck && pnpm -r --filter ./apps/api --if-present test && pnpm -r --filter ./apps/api --if-present build"
   },
   "lint-staged": {
     "apps/web/**/*.{ts,tsx,js,jsx}": "pnpm --filter ./apps/web exec eslint --fix --",
@@ -31,6 +33,7 @@
   "devDependencies": {
     "husky": "^8.0.0",
     "lint-staged": "16.2.6",
-    "prettier": "^3.6.2"
+    "prettier": "^3.6.2",
+    "prisma": "6.19.0"
   }
 }

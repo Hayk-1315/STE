@@ -22,7 +22,8 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --runInBand --testPathPattern=e2e"
+    "test:e2e": "jest --runInBand --testPathPattern=e2e",
+    "postinstall": "prisma generate --schema prisma/schema.prisma"
   },
   "dependencies": {
     "@0x/contract-addresses": "8.13.0",
@@ -30,9 +31,12 @@
     "@nestjs/common": "^11.1.8",
     "@nestjs/core": "^11.1.8",
     "@nestjs/platform-express": "^11.1.8",
+    "@nestjs/schedule": "6.0.1",
     "@prisma/client": "6.19.0",
+    "decimal.js": "10.6.0",
     "dotenv": "17.2.3",
     "ethers": "6.15.0",
+    "nodejs-order-book": "10.0.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "zod": "4.1.12"

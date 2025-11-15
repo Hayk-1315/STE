@@ -1,15 +1,16 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { loadEnv } from './config/env';
+import { Logger } from '@nestjs/common';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // Read validated environment (typed)
-  const env = loadEnv();
-
-  // Listen on typed PORT (default handled by schema)
-  await app.listen(env.PORT);
+  await app.listen(
+    process.env.PORT ? Number(process.env.PORT) : 3000,
+    '0.0.0.0',
+  );
+  const url = await app.getUrl();
+  Logger.log(`API listening at ${url}`);
 }
 
 // Explicitly mark the top-level async call
