@@ -16,3 +16,14 @@
 - 2025-11-15: Snapshots @ 1 Hz (top-25). Decision: Capture book snapshots every second with depth=25. Rationale: Sufficient for dev and initial monitoring; adjustable later if WS/rehydration demand changes. Impact: book_snapshots grows predictably; cleanup/compaction to be scheduled in later phase.
 - 2025-11-15: Dev endpoints wired to core engine. Decision: Replace the temporary EngineService with EngineController → OrderBookService. Rationale: One single engine in all environments; avoids drift between dev and prod logic. Impact: Dev routes now exercise the real matching path; easier smoke/E2E.
 - 2025-11-15: Idempotent place() by orderHash. Decision: place() removes any existing in-memory order with the same orderHash before inserting. Rationale: Align semantics with orders PK and avoid duplicates during retries. Impact: Stable behavior under client/network retries.
+- 2025-11-19: In-memory LOB by symbol: Chosen for simplicity/latency in F3; persistence of snapshots in DB; accept volatility on process restart (will revisit Redis/persistent books later).
+- 2025-11-19: Price tick representation: Use integer ticks where price = priceTicks \* priceTickQ / 10^quoteDecimals; enforce exact divisibility (price_tick_violation) to avoid rounding.
+- 2025-11-19: Partial fill semantics: Allow partial fills; cancellation operates only on remaining size; executed trades are immutable.
+- 2025-11-19: Signature domain: Validate 0x v4 EIP-712 against { name: '0x Protocol', version: '4', chainId, verifyingContract }; DEV_SKIP_SIGS retained for dev only; prod must verify.
+- 2025-11-19: Store raw 0x payloads: Persist zeroExOrder (JSON) and signature (Bytes) in Order; also keep in-memory attachments for quote→txData.
+- 2025-11-19: EP tx builders: Implement fillLimitOrder and cancelLimitOrder in ZeroExTxBuildersService; only single-fill txData emitted in F3; batch/multicall deferred to F4.
+- 2025-11-19: Public API/WS surface: Locked endpoints (/markets, /orderbook, /trades, /orders, /cancel, /match/quote, /orders?…) and WS rooms (book:{symbol}, orders:{address}); /dev/engine/\* kept for internal testing.
+- 2025-11-19: DB indexes: Added Order(maker), Order(marketId,status), Order(placedAt,orderHash), OrderEvent(orderHash,ts) to support queries and streams; Prisma client regenerated.
+- 2025-11-19: Seed normalization: Standardized token decimals (WETH=18, USDC=6, WBTC=8) and coherent priceTickQ/minSizeB/minNotionalQ; idempotent upsert seeding.
+- 2025-11-19: Off-chain vs on-chain: F3 computes matches and records trades off-chain; taker settlement on-chain is an explicit step exposed later (F4).
+- 2025-11-19: Observability (dev): Added /dev/engine/inspect for raw levels and WS orders:{address} stream for per-maker tracing.

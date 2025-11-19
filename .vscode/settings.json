@@ -16,11 +16,7 @@
   ],
 
   // Monorepo awareness: let ESLint resolve configs per package
-  "eslint.workingDirectories": [
-    { "mode": "auto" },
-    "apps/api",
-    "apps/web"
-  ],
+  "eslint.workingDirectories": [{ "mode": "auto" }, "apps/api", "apps/web"],
 
   // Optional: avoid conflicting formatters
   "editor.defaultFormatter": "esbenp.prettier-vscode",

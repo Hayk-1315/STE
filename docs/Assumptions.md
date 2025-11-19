@@ -22,3 +22,17 @@
 - Security/compliance: EIP-712 signing remains client-side; server only verifies and builds 0x tx in later phases. No private keys on server.
 - Dependencies: @nestjs/schedule used for cron; Prisma client pinned to match Prisma CLI version; Node LTS + pnpm + strict TS.
 - Logging & errors: Dev routes return 400 for missing fields (light validation); otherwise errors bubble up with minimal details in non-prod only.
+- Scope F3: Public read APIs (GET /markets, GET /orderbook, GET /trades), signed order ingest (POST /orders), cancel (POST /cancel), and taker quotes (POST /match/quote); WS streams for books (book:{symbol}) and orders (orders:{address}).
+- Chain & 0x: Dev runs on CHAIN_ID=84532 (Base Sepolia) with a placeholder ZEROEX_EXCHANGE_PROXY=0x000…01; production must set real 0x addresses.
+- Signature policy: POST /orders verifies 0x v4 EIP-712 (or EthSign via SignatureType); POST /cancel verifies eth_sign(orderHash); DEV_SKIP_SIGS=1 only allowed in dev to bypass real signature checks.
+- Price model: price = priceTicks \* priceTickQ / 10^quoteDecimals; reject non-multiples with price_tick_violation.
+- Partial fills: Supported; executed size is immutable, only remaining size can be canceled.
+- LOB memory model: Per-symbol in-memory book (process-local) for speed; periodic DB snapshots for GET /orderbook?source=snapshot; book state is lost on restart.
+  -Quotes & txData: POST /match/quote returns an execution plan; if exactly one fill has raw order+sig, also returns txData for fillLimitOrder; multicall/batch deferred to F4.
+- markets.json seeding: Three demo markets (WETH-USDC, WBTC-USDC, WETH-WBTC); addresses are valid hex; decimals: WETH=18, USDC=6, WBTC=8; rules persisted in smallest units (minNotionalQ, minSizeB, priceTickQ).
+- Orders query: GET /orders?address&status&symbol&limit&cursorId paginates by { placedAt desc, orderHash desc }; response includes nextCursor.
+- WebSockets: book:{symbol} broadcasts ~1s snapshots; orders:{address} streams { placed | partial_fill | filled | cancelled }.
+- Dev boundaries: /dev/\*\* endpoints exist only in non-prod builds.
+- Scripts: scripts/sign-limit-order.ts, scripts/sign-cancel-order.ts, scripts/ws-smoke.js, scripts/ws-orders-smoke.js for local testing.
+- Timestamps: All server timestamps are UTC.
+- Logging & errors: Dev routes return 400 on missing/invalid fields (light validation); otherwise errors are minimal and non-verbose outside dev.

@@ -3,9 +3,13 @@
   "markets": [
     {
       "symbol": "WETH-USDC",
-      "baseToken": { "address": "0xBase...", "symbol": "WETH", "decimals": 18 },
+      "baseToken": {
+        "address": "0x0000000000000000000000000000000000000001",
+        "symbol": "WETH",
+        "decimals": 18
+      },
       "quoteToken": {
-        "address": "0xQuote...",
+        "address": "0x0000000000000000000000000000000000000002",
         "symbol": "USDC",
         "decimals": 6
       },
@@ -17,9 +21,13 @@
     },
     {
       "symbol": "WBTC-USDC",
-      "baseToken": { "address": "0xBase...", "symbol": "WBTC", "decimals": 8 },
+      "baseToken": {
+        "address": "0x0000000000000000000000000000000000000003",
+        "symbol": "WBTC",
+        "decimals": 8
+      },
       "quoteToken": {
-        "address": "0xQuote...",
+        "address": "0x0000000000000000000000000000000000000002",
         "symbol": "USDC",
         "decimals": 6
       },
@@ -31,9 +39,13 @@
     },
     {
       "symbol": "WETH-WBTC",
-      "baseToken": { "address": "0xBase...", "symbol": "WETH", "decimals": 18 },
+      "baseToken": {
+        "address": "0x0000000000000000000000000000000000000001",
+        "symbol": "WETH",
+        "decimals": 18
+      },
       "quoteToken": {
-        "address": "0xQuote...",
+        "address": "0x0000000000000000000000000000000000000003",
         "symbol": "WBTC",
         "decimals": 8
       },

@@ -6,6 +6,7 @@ import { OrderBookService, Side } from '../matching/orderbook.service';
 import { PrismaClient } from '@prisma/client';
 import { PersistenceRepository } from '../matching/persistence.repository';
 import { BadRequestException } from '@nestjs/common';
+import type { DumpBook } from '../matching/orderbook.service';
 
 type PlaceDTO = {
   marketId: string;
@@ -60,6 +61,15 @@ export class EngineController {
       l2: this.ob.snapshot(m, 5),
     }));
     return { markets };
+  }
+
+  @Get('inspect')
+  inspect(@Query('symbol') symbol: string): { symbol: string } & DumpBook {
+    if (!symbol) {
+      throw new BadRequestException('symbol required');
+    }
+    const out = this.ob.dump(symbol);
+    return { symbol: symbol.toUpperCase(), ...out };
   }
 
   @Post('place')

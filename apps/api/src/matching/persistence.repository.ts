@@ -1,5 +1,6 @@
 // apps/api/src/matching/persistence.repository.ts
 import { Injectable } from '@nestjs/common';
+import { PublicWsGateway } from '../public/public.ws';
 import {
   PrismaClient,
   Prisma,
@@ -8,36 +9,149 @@ import {
   EventType,
 } from '@prisma/client';
 
+type MarketBasic = {
+  id: string;
+  symbol: string;
+  baseAddress: string;
+  quoteAddress: string;
+};
+
+type TradingContext = {
+  id: string;
+  symbol: string;
+  baseDecimals: number;
+  quoteDecimals: number;
+  minNotionalQ: bigint;
+  minSizeB: bigint;
+  priceTickQ: bigint;
+  baseAddress: string;
+  quoteAddress: string;
+};
+
+export type OrderListItem = {
+  id: string;
+  symbol: string;
+  maker: string;
+  status: OrderStatus;
+  priceTicks: string;
+  sizeBase: string;
+  remainingBase: string;
+  ts: string;
+};
+export type OrdersListResponse = {
+  items: OrderListItem[];
+  nextCursor?: { id: string };
+};
+
 @Injectable()
 export class PersistenceRepository {
   private prisma = new PrismaClient();
+  constructor(private readonly ws: PublicWsGateway) {}
+  private emitOrderEvent(makerLower: string, payload: unknown) {
+    this.ws.emitOrderEvent(makerLower, payload);
+  }
+  getSymbolSync: any;
 
-  async getTradingContext(key: string) {
-    let m = await this.prisma.market.findUnique({
-      where: { id: key },
+  async getTradingContext(marketOrSymbol: string): Promise<TradingContext> {
+    const m = await this.prisma.market.findFirst({
+      where: { OR: [{ id: marketOrSymbol }, { symbol: marketOrSymbol }] },
       include: { baseToken: true, quoteToken: true },
     });
-    if (!m) {
-      m = await this.prisma.market.findUnique({
-        where: { symbol: key },
-        include: { baseToken: true, quoteToken: true },
-      });
-    }
     if (!m) throw new Error('market_not_found');
 
     return {
-      id: m.id, // <-- ID CANÓNICO
+      id: m.id,
+      symbol: m.symbol,
       baseDecimals: m.baseToken.decimals,
       quoteDecimals: m.quoteToken.decimals,
       minNotionalQ: BigInt(m.minNotionalQ.toString()),
       minSizeB: BigInt(m.minSizeB.toString()),
       priceTickQ: BigInt(m.priceTickQ.toString()),
+      baseAddress: m.baseToken.address.toLowerCase(),
+      quoteAddress: m.quoteToken.address.toLowerCase(),
     };
   }
 
   // list id+symbol for debuging purposes
-  async listMarketsBasic() {
-    return this.prisma.market.findMany({ select: { id: true, symbol: true } });
+  async listMarketsBasic(): Promise<MarketBasic[]> {
+    const rows = await this.prisma.market.findMany({
+      select: {
+        id: true,
+        symbol: true,
+        baseToken: { select: { address: true } },
+        quoteToken: { select: { address: true } },
+      },
+    });
+
+    return rows.map((r) => ({
+      id: r.id,
+      symbol: r.symbol,
+      baseAddress: r.baseToken.address.toLowerCase(),
+      quoteAddress: r.quoteToken.address.toLowerCase(),
+    }));
+  }
+
+  async findOrders(params: {
+    maker?: string;
+    status?: OrderStatus[];
+    symbol?: string;
+    limit?: number;
+    cursorId?: string; // orderHash para paginación
+  }): Promise<OrdersListResponse> {
+    const makerLower = params.maker
+      ? params.maker.trim().toLowerCase()
+      : undefined;
+    const limit = Math.max(1, Math.min(params.limit ?? 50, 200));
+
+    // where dinámico
+    const where: Prisma.OrderWhereInput = {};
+    if (makerLower) where.maker = makerLower;
+    if (params.status && params.status.length > 0)
+      where.status = { in: params.status };
+    if (params.symbol) where.market = { symbol: params.symbol };
+
+    // 1) select fuertemente tipado
+    const orderSelect = Prisma.validator<Prisma.OrderSelect>()({
+      orderHash: true,
+      maker: true,
+      status: true,
+      priceTicks: true,
+      sizeBase: true,
+      remainingBase: true,
+      placedAt: true,
+      market: { select: { symbol: true } },
+    });
+
+    type OrderRow = Prisma.OrderGetPayload<{ select: typeof orderSelect }>;
+
+    // 2) findMany con args inline (no uses una var `query` tipada amplio)
+    const rows: OrderRow[] = await this.prisma.order.findMany({
+      where,
+      orderBy: [{ placedAt: 'desc' }, { orderHash: 'desc' }],
+      take: limit,
+      select: orderSelect,
+      ...(params.cursorId
+        ? { cursor: { orderHash: params.cursorId }, skip: 1 }
+        : {}),
+    });
+
+    const items: OrderListItem[] = rows.map((r) => ({
+      id: r.orderHash,
+      symbol: r.market.symbol, // <- ahora es string tipado
+      maker: r.maker,
+      status: r.status,
+      priceTicks: r.priceTicks.toString(),
+      sizeBase: r.sizeBase.toString(),
+      remainingBase: r.remainingBase.toString(),
+      ts: r.placedAt.toISOString(),
+    }));
+
+    const nextCursor =
+      rows.length === limit
+        ? { id: rows[rows.length - 1].orderHash }
+        : undefined;
+
+    return { items, nextCursor };
   }
 
   private D(x: bigint | number | string): Prisma.Decimal {
@@ -82,6 +196,21 @@ export class PersistenceRepository {
         } as Prisma.InputJsonValue,
       },
     });
+
+    // Emit "placed" to the maker room (orders:{maker})
+    const symRow = await this.prisma.market.findUnique({
+      where: { id: p.marketId },
+      select: { symbol: true },
+    });
+    this.emitOrderEvent(p.maker.toLowerCase(), {
+      type: 'placed',
+      orderHash: p.orderHash,
+      symbol: symRow?.symbol ?? 'UNKNOWN',
+      priceTicks: p.priceTicks.toString(),
+      sizeBase: p.sizeBase.toString(),
+      remainingBase: p.sizeBase.toString(),
+      ts: new Date().toISOString(),
+    });
   }
 
   async addTrade(
@@ -107,12 +236,26 @@ export class PersistenceRepository {
     execSizeBase: bigint,
     newStatus: OrderStatus,
   ) {
-    await this.prisma.order.update({
+    const updated = await this.prisma.order.update({
       where: { orderHash },
       data: {
         remainingBase: { decrement: this.D(execSizeBase) },
         status: newStatus,
       },
+      select: {
+        maker: true,
+        remainingBase: true,
+        market: { select: { symbol: true } },
+      },
+    });
+
+    // Emit "partial_fill" or "filled" to the maker room
+    this.emitOrderEvent(updated.maker.toLowerCase(), {
+      type: newStatus === OrderStatus.FILLED ? 'filled' : 'partial_fill',
+      orderHash,
+      symbol: updated.market.symbol,
+      remainingBase: updated.remainingBase.toString(),
+      ts: new Date().toISOString(),
     });
   }
 
@@ -128,10 +271,12 @@ export class PersistenceRepository {
   }
 
   async cancelOrder(marketId: string, orderHash: string) {
-    await this.prisma.order.update({
+    const upd = await this.prisma.order.update({
       where: { orderHash },
       data: { status: OrderStatus.CANCELLED },
+      select: { maker: true, market: { select: { symbol: true } } },
     });
+
     await this.prisma.orderEvent.create({
       data: {
         marketId,
@@ -139,6 +284,13 @@ export class PersistenceRepository {
         type: EventType.CANCELLED,
         payload: Prisma.JsonNull,
       },
+    });
+    // Emit "cancelled" to the maker room
+    this.emitOrderEvent(upd.maker.toLowerCase(), {
+      type: 'cancelled',
+      orderHash,
+      symbol: upd.market.symbol,
+      ts: new Date().toISOString(),
     });
   }
 }

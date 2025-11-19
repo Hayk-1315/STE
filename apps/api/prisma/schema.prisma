@@ -92,6 +92,9 @@ model Order {
 
   @@index([marketId, status])
   @@index([maker])
+
+  @@index([maker, status, placedAt])
+  @@index([maker, placedAt])
 }
 
 model Trade {

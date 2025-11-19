@@ -6,19 +6,17 @@ import { DevModule } from './dev/dev.module';
 import { EngineModule } from './dev/engine.module';
 import { MatchingModule } from './matching/matching.module';
 import { ScheduleModule } from '@nestjs/schedule';
-
-const imports: any[] = [ZeroExModule, MatchingModule];
-if (process.env.NODE_ENV !== 'production') {
-  imports.push(DevModule, EngineModule);
-}
+import { PublicModule } from './public/public.module';
 
 @Module({
   imports: [
     ScheduleModule.forRoot(),
-    MatchingModule,
-    EngineModule,
-    // ZeroExModule, DevModule, ...
+    MatchingModule, // global LOB + repos
+    ZeroExModule, // 0x signing + addresses
+    PublicModule, // REST/WS públicos
+    ...(process.env.NODE_ENV !== 'production' ? [DevModule, EngineModule] : []), // /dev/*
   ],
+
   controllers: [AppController],
   providers: [AppService],
 })
