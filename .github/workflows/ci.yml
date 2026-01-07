@@ -52,5 +52,7 @@ jobs:
         run: pnpm -r --if-present build
         env:
          NEXT_PUBLIC_API_BASE_URL: "http://localhost:3001"
-         CHAIN_ID: "8453"  
+         NEXT_PUBLIC_CHAIN_ID: "8453"
+         NEXT_PUBLIC_ZEROEX_EXCHANGE_PROXY: "0xDef1C0ded9bEc7F1A1670819833240f027b25EfF"
+         CHAIN_ID: "8453"
          ZEROEX_EXCHANGE_PROXY: "0xDef1C0ded9bEc7F1A1670819833240f027b25EfF"
