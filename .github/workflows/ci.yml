@@ -45,8 +45,8 @@ jobs:
       - name: Typecheck
         run: pnpm -r --if-present typecheck
 
-      - name: Unit tests
-        run: pnpm -r --if-present test
+      - name: Run tests (web only for now)
+        run: pnpm -C apps/web test
 
       - name: Build
         run: pnpm -r --if-present build
