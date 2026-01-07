@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-argument */
 // apps/api/test/zeroex/tx-builders.spec.ts
 import { ZeroExAddressesService } from '../../src/zeroex/addresses.service';
 import { ZeroExTxBuildersService } from '../../src/zeroex/tx-builders.service';

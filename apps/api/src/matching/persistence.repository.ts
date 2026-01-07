@@ -8,6 +8,8 @@ import {
   OrderSide,
   EventType,
 } from '@prisma/client';
+import type { LimitOrder, Signature } from '../zeroex/limit-order.types';
+import { metrics } from '../infra/metrics';
 
 type MarketBasic = {
   id: string;
@@ -51,6 +53,104 @@ export class PersistenceRepository {
     this.ws.emitOrderEvent(makerLower, payload);
   }
   getSymbolSync: any;
+
+  async expireOrder(marketId: string, orderHash: string) {
+    const upd = await this.prisma.order.update({
+      where: { orderHash },
+      data: { status: OrderStatus.EXPIRED },
+      select: { maker: true, market: { select: { symbol: true } } },
+    });
+
+    await this.prisma.orderEvent.create({
+      data: {
+        marketId,
+        orderHash,
+        type: EventType.EXPIRED,
+        payload: Prisma.JsonNull,
+      },
+    });
+
+    // Emitimos un WS específico "expired" al maker
+    this.emitOrderEvent(upd.maker.toLowerCase(), {
+      type: 'expired',
+      orderHash,
+      symbol: upd.market.symbol,
+      ts: new Date().toISOString(),
+    });
+    metrics.inc('expired');
+  }
+
+  // apps/api/src/matching/persistence.repository.ts (dentro de class PersistenceRepository)
+  async getOrderRemaining(orderHash: string): Promise<bigint | null> {
+    const row = await this.prisma.order.findUnique({
+      where: { orderHash },
+      select: { remainingBase: true },
+    });
+    return row ? BigInt(row.remainingBase.toString()) : null;
+  }
+
+  async findPlacedOrderCore(orderHash: string): Promise<{
+    symbol: string;
+    maker: string;
+    side: OrderSide;
+    priceTicks: bigint;
+    remainingBase: bigint;
+  } | null> {
+    const row = await this.prisma.order.findUnique({
+      where: { orderHash },
+      select: {
+        status: true,
+        maker: true,
+        side: true,
+        priceTicks: true,
+        remainingBase: true,
+        market: { select: { symbol: true } },
+      },
+    });
+    if (!row || row.status !== OrderStatus.PLACED) return null;
+    return {
+      symbol: row.market.symbol,
+      maker: row.maker,
+      side: row.side,
+      priceTicks: BigInt(row.priceTicks.toString()),
+      remainingBase: BigInt(row.remainingBase.toString()),
+    };
+  }
+
+  async listPlacedBySymbol(symbol: string): Promise<
+    Array<{
+      orderHash: string;
+      maker: string;
+      side: OrderSide;
+      priceTicks: bigint;
+      remainingBase: bigint;
+    }>
+  > {
+    const rows = await this.prisma.order.findMany({
+      where: {
+        status: OrderStatus.PLACED,
+        market: { symbol },
+        remainingBase: { gt: new Prisma.Decimal(0) },
+      },
+      select: {
+        orderHash: true,
+        maker: true,
+        side: true,
+        priceTicks: true,
+        remainingBase: true,
+      },
+      orderBy: [{ placedAt: 'asc' }, { orderHash: 'asc' }],
+      take: 10000,
+    });
+
+    return rows.map((r) => ({
+      orderHash: r.orderHash,
+      maker: r.maker,
+      side: r.side,
+      priceTicks: BigInt(r.priceTicks.toString()),
+      remainingBase: BigInt(r.remainingBase.toString()),
+    }));
+  }
 
   async getTradingContext(marketOrSymbol: string): Promise<TradingContext> {
     const m = await this.prisma.market.findFirst({
@@ -211,6 +311,7 @@ export class PersistenceRepository {
       remainingBase: p.sizeBase.toString(),
       ts: new Date().toISOString(),
     });
+    metrics.inc('placed');
   }
 
   async addTrade(
@@ -257,6 +358,8 @@ export class PersistenceRepository {
       remainingBase: updated.remainingBase.toString(),
       ts: new Date().toISOString(),
     });
+    if (newStatus === OrderStatus.FILLED) metrics.inc('filled');
+    else metrics.inc('partial_fill');
   }
 
   async appendEvent(
@@ -292,5 +395,95 @@ export class PersistenceRepository {
       symbol: upd.market.symbol,
       ts: new Date().toISOString(),
     });
+    metrics.inc('cancelled');
+  }
+
+  /** Bytes → 0x-prefixed hex string */
+  private bytesToHex(b: Uint8Array): `0x${string}` {
+    let out = '0x';
+    for (let i = 0; i < b.length; i++) {
+      out += b[i].toString(16).padStart(2, '0');
+    }
+    return out as `0x${string}`;
+  }
+
+  /**
+   * Minimal raw fetch for quote → build txData.
+   * Returns zeroExOrder + signature for a given orderHash (typed).
+   */
+  // al final de la clase PersistenceRepository, antes de findRawOrderByHash o junto a él
+  async attachRawToOrder(params: {
+    orderHash: string;
+    order: LimitOrder;
+    signature?: Signature | `0x${string}`;
+  }) {
+    const { orderHash, order, signature } = params;
+
+    // expiry en BD es bigint: normalizamos desde number/string/bigint
+    const expRaw = (order as unknown as { expiry?: unknown })?.expiry;
+    const expiryBig =
+      typeof expRaw === 'number'
+        ? BigInt(expRaw)
+        : typeof expRaw === 'string'
+          ? BigInt(expRaw)
+          : typeof expRaw === 'bigint'
+            ? expRaw
+            : 0n;
+
+    // salt como string (columna existente)
+    const saltRaw = (order as unknown as { salt?: unknown })?.salt;
+    const saltStr =
+      typeof saltRaw === 'string'
+        ? saltRaw
+        : typeof saltRaw === 'number'
+          ? String(saltRaw)
+          : typeof saltRaw === 'bigint'
+            ? saltRaw.toString()
+            : '';
+
+    // signature → bytes si es hex; si no, la dejamos vacía (para cancel no es necesaria)
+    const sigBuf =
+      typeof signature === 'string' && signature.startsWith('0x')
+        ? Buffer.from(signature.slice(2), 'hex')
+        : Buffer.alloc(0);
+
+    await this.prisma.order.update({
+      where: { orderHash },
+      data: {
+        zeroExOrder: order as unknown as Prisma.InputJsonValue,
+        signature: sigBuf,
+        expiry: expiryBig,
+        salt: saltStr,
+      },
+    });
+  }
+
+  async findRawOrderByHash(
+    orderHash: string,
+  ): Promise<{ zeroExOrder: LimitOrder | null; signature: Signature | null }> {
+    const row = await this.prisma.order.findUnique({
+      where: { orderHash },
+      select: { zeroExOrder: true, signature: true },
+    });
+
+    // Trata null/undefined como ausencia de orden; si hay valor, típalo como LimitOrder
+    const raw = row?.zeroExOrder as unknown;
+    const zeroExOrder: LimitOrder | null =
+      raw == null ? null : (raw as LimitOrder);
+
+    // signature puede ser Buffer/Uint8Array o string (según el schema/client)
+    let signature: Signature | null = null;
+    const s = row?.signature as unknown;
+
+    if (typeof s === 'string') {
+      const hex = s.startsWith('0x') ? (s as `0x${string}`) : `0x${s}`;
+      signature = hex as unknown as Signature;
+    } else if (s && typeof (s as { length: number }).length === 'number') {
+      // Buffer o Uint8Array
+      const hex = this.bytesToHex(s as Uint8Array);
+      signature = hex as unknown as Signature;
+    }
+
+    return { zeroExOrder, signature };
   }
 }

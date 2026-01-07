@@ -8,7 +8,7 @@ import type { ZeroExConfig } from './zeroex.config';
  * Known Permit2/AllowanceHolder spender for Cancun chains (incl. Base).
  * Source: 0x cheat sheet / contracts docs.
  */
-const PERMIT2_ALLOWANCE_HOLDER = '0x0000000000001fF3684f28c67538d4D072C22734';
+const PERMIT2_ALLOWANCE_HOLDER = '0xdef1c0ded9bec7f1a1670819833240f027b25eff';
 
 @Injectable()
 export class ZeroExAddressesService {

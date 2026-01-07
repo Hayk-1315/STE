@@ -8,12 +8,7 @@
   },
 
   // Validate TS/TSX with ESLint
-  "eslint.validate": [
-    "javascript",
-    "javascriptreact",
-    "typescript",
-    "typescriptreact"
-  ],
+  "eslint.validate": ["javascript", "javascriptreact", "typescript", "typescriptreact"],
 
   // Monorepo awareness: let ESLint resolve configs per package
   "eslint.workingDirectories": [{ "mode": "auto" }, "apps/api", "apps/web"],

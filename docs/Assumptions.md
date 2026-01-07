@@ -36,3 +36,21 @@
 - Scripts: scripts/sign-limit-order.ts, scripts/sign-cancel-order.ts, scripts/ws-smoke.js, scripts/ws-orders-smoke.js for local testing.
 - Timestamps: All server timestamps are UTC.
 - Logging & errors: Dev routes return 400 on missing/invalid fields (light validation); otherwise errors are minimal and non-verbose outside dev.
+- F4 uses Base Sepolia (NEXT_PUBLIC_CHAIN_ID=84532); EP and tokens can be dummy in dev.
+- DEV_SKIP_SIGS=1 allows skipping maker signature in dev; taker always signs/sends tx if there is txData.
+- Price tick is fixed per market; inputs are normalized to that tick and token decimals.
+- Notional = size(base) × price(quote) and is displayed in human quote units.
+- Orderbook timestamps are derived from the first PLACED with remainingBase>0 at that priceTicks.
+- Recent trades shows the latest 10 executions ordered by ts desc.
+- My Orders (live) hydrates from DB on connect and shows up to 5 entries per user.
+- In F4 we only support single-fill on-chain; if the quote needs multi-fill the server won’t return txData.
+- Web3Auth behaves as EIP-1193; each login/email can generate a new key and address.
+- ste:refresh forces client reload of book + trades after tx; ste:set-taker pre-fills size/side.
+- Canonical 0x Exchange Proxy on Base is 0xdef1c0…5eff; batchFillLimitOrders is not registered there.
+- Engine must operate single-fill only; multi-fill requests are rejected with a clear message.
+- On-chain fills can occur outside the app; we reconcile them via the FillWatcher (dedup + idempotent updates).
+- In-memory orderbook is keyed by symbol; fallback snapshots are aggregated from DB when memory is empty.
+- WebSocket feed broadcasts per-symbol snapshots; clients must resubscribe on symbol change and normalize casing.
+- Frontend must not simulate fills if the watcher is enabled; persistence is the source of truth.
+- “Unlimited” allowance is any value > 2^255; show that label instead of a compact number.
+- Spender resolution: prefer /dev/zeroex/sanity.allowanceSpender, fallback to EP address.

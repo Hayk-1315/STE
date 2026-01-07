@@ -27,3 +27,23 @@
 - 2025-11-19: Seed normalization: Standardized token decimals (WETH=18, USDC=6, WBTC=8) and coherent priceTickQ/minSizeB/minNotionalQ; idempotent upsert seeding.
 - 2025-11-19: Off-chain vs on-chain: F3 computes matches and records trades off-chain; taker settlement on-chain is an explicit step exposed later (F4).
 - 2025-11-19: Observability (dev): Added /dev/engine/inspect for raw levels and WS orders:{address} stream for per-maker tracing.
+- 2025-12-01: UI: Removed Refresh button from header; added smooth auto-refresh + “Live” badge.
+- 2025-12-01: Header: Compact MarketHeader on the left under the title; Chain/Account on the right.
+- 2025-12-01: Maker form: Segmented BUY/SELL, humanized inputs with sanitization, ±1 tick and Set best.
+- 2025-12-01: Maker validation: min size/notional/tick with readable hints; errors via toast.
+- 2025-12-01: TakerBox: 3-step flow (Quote → Approve → Execute) with approve banner in human units.
+- 2025-12-01: Preflight: Check Gas / Balance only when txData (single-fill) exists; otherwise “multi-fill” notice.
+- 2025-12-01: Orderbook: levels show “Placed” timestamp per price; WS includes DB fallback if no snapshot.
+- 2025-12-01: My Orders: dedupe events and cap at 5; states PLACED/PARTIAL_FILLED/FILLED/CANCELLED.
+- 2025-12-01: UX: Hidden explicit “Take”; taker engine auto-sweeps the best price.
+- 2025-12-01: Wallet: Injected + Web3Auth (modal) support; fixed chainChanged handling in ethers v6.
+- 2025-12-01: Indicators: DemoModeBanner when EP/tokens are dummy; ChainBadge with expected status.
+- 2025-12-01: Maintenance: script pnpm -F api exec ts-node scripts/clear-dev.ts to reset dev data.
+- 2026-01-04: Enable FillWatcher with interval tick, hash de-dup, and recent-trades persistence after applyExternalFill.
+- 2026-01-04: Prevent double counting by removing client dev-simulation when watcher is active.
+- 2026-01-04: WS gateway now emits per-symbol book snapshots every ~1s; DB fallback when memory L2 is empty; include level timestamps.
+- 2026-01-04: Frontend WS: resubscribe on symbol change, force uppercase symbols, and cleanly unsubscribe on unmount.
+- 2026-01-04: Taker UX: show backend insufficient_liquidity on Quote; disable Execute when txData is absent.
+- 2026-01-04: Allowance UX: add Revoke, “Enable Max” uses MaxUint256, display “Unlimited”, remove flicker via block-based silent refresh.
+- 2026-01-04: Backend: explicitly reject multi-fill on Base with a clear error message; stick to single-fill.
+- 2026-01-04: DI fix: register ZEROEX_CONFIG / ZeroExAddressesService in module to resolve FillWatcher dependencies.
