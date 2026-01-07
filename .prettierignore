@@ -1,0 +1,19 @@
+# .prettierignore
+.dev/
+**/cache/
+**/rpc_cache/
+**/hardhat-network-fork/
+**/artifacts/
+**/typechain*/
+**/dist/
+**/build/
+**/.next/
+**/coverage/
+
+apps/api/.cache/
+**/.cache/
+
+node_modules
+pnpm-lock.yaml
+apps/api/dist
+apps/web/.next
