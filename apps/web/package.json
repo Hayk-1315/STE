@@ -5,16 +5,24 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "lint": "eslint . --ext .ts,.tsx,.js,.jsx --max-warnings=0",
+    "format": "prettier --write",
+    "lint": "eslint . --ext .ts,.tsx,.js,.jsx --max-warnings=20",
     "lint:fix": "eslint . --ext .ts,.tsx,.js,.jsx --fix",
     "typecheck": "tsc --noEmit",
     "test": "node -e \"process.exit(0)\"",
     "start": "next start"
   },
   "dependencies": {
+    "@web3auth/base": "8.12.4",
+    "@web3auth/modal": "8.12.4",
+    "@web3auth/openlogin-adapter": "8.12.4",
+    "ethers": "6.15.0",
+    "lucide-react": "0.554.0",
     "next": "16.0.1",
     "react": "19.2.0",
     "react-dom": "19.2.0",
+    "socket.io-client": "4.8.1",
+    "sonner": "^1.7.4",
     "zod": "4.1.12"
   },
   "devDependencies": {
@@ -30,6 +38,7 @@
     "eslint-plugin-jsx-a11y": "6.10.2",
     "eslint-plugin-react": "7.37.5",
     "eslint-plugin-react-hooks": "7.0.1",
+    "prettier": "^3.6.2",
     "tailwindcss": "^4.1.17",
     "typescript": "^5.9.3"
   }

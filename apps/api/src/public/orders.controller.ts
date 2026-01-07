@@ -4,6 +4,7 @@ import { OrderBookService, Side } from '../matching/orderbook.service';
 import { PersistenceRepository } from '../matching/persistence.repository';
 import { ZeroExSigningService } from '../zeroex/signing.service';
 import type { LimitOrder, Signature } from '../zeroex/limit-order.types';
+import { SignatureType } from '../zeroex/limit-order.types';
 import {
   hashMessage,
   getBytes,
@@ -11,6 +12,7 @@ import {
   keccak256,
   toUtf8Bytes,
 } from 'ethers';
+import { ZeroExTxBuildersService } from '../zeroex/tx-builders.service';
 
 type PostOrderDTO = {
   order: LimitOrder;
@@ -23,6 +25,34 @@ type CancelDTO = {
   maker: string;
   signature: string; // raw eth_sign hex string
 };
+
+// helper: parse 65-byte hex signature into tuple; normalize v to 27/28
+function parseSigHexToTuple(
+  sigHex: string,
+  signatureType: SignatureType = SignatureType.EIP712,
+): Signature {
+  const hex = sigHex.startsWith('0x') ? sigHex.slice(2) : sigHex;
+  if (hex.length !== 130) {
+    throw new BadRequestException('invalid_signature_hex');
+  }
+
+  // Ensure template-literal type is preserved
+  const r: `0x${string}` = `0x${hex.slice(0, 64)}`;
+  const s: `0x${string}` = `0x${hex.slice(64, 128)}`;
+
+  let v = parseInt(hex.slice(128, 130), 16);
+  if (v === 0 || v === 1) v += 27;
+
+  // Cast the whole object to Signature to satisfy strict typing
+  return { signatureType, v, r, s } as Signature;
+}
+
+// normaliza firma hex de 65 bytes → `0x${string}` o undefined
+function toHexSig65(v: unknown): `0x${string}` | undefined {
+  if (typeof v !== 'string') return undefined;
+  const hex = v.startsWith('0x') ? v.slice(2) : v;
+  return /^[0-9a-fA-F]{130}$/.test(hex) ? `0x${hex}` : undefined;
+}
 
 const pow10 = (n: number) => {
   let r = 1n;
@@ -43,12 +73,29 @@ const getChainIdFromEnv = (): number => {
   return parsed;
 };
 
+function hasRawOrder(x: unknown): x is { order: LimitOrder } {
+  return typeof x === 'object' && x !== null && 'order' in x;
+}
+
+type OrderBookWithGetRaw = {
+  getRaw: (marketId: string, orderHash: string) => Promise<unknown>;
+};
+
+function hasGetRaw(x: unknown): x is OrderBookWithGetRaw {
+  return (
+    typeof x === 'object' &&
+    x !== null &&
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    typeof (x as any).getRaw === 'function'
+  );
+}
 @Controller()
 export class OrdersController {
   constructor(
     private readonly ob: OrderBookService,
     private readonly repo: PersistenceRepository,
     private readonly signing: ZeroExSigningService,
+    private readonly txBuilders: ZeroExTxBuildersService,
   ) {}
 
   /**
@@ -60,6 +107,8 @@ export class OrdersController {
   @Post('orders')
   async place(@Body() body: PostOrderDTO) {
     const { order, signature } = body;
+    if (typeof order.expiry === 'string')
+      (order as unknown as { expiry: number }).expiry = Number(order.expiry);
     if (!order || !signature) {
       throw new BadRequestException('order and signature are required');
     }
@@ -75,14 +124,60 @@ export class OrdersController {
       orderHash = keccak256(toUtf8Bytes(JSON.stringify(order)));
     } else {
       const chainId = getChainIdFromEnv();
+
+      // NEW: accept hex or tuple, and normalize v
+      const sigUnion: Signature =
+        typeof (signature as unknown) === 'string'
+          ? parseSigHexToTuple(
+              signature as unknown as string,
+              SignatureType.EIP712,
+            )
+          : (() => {
+              const s = signature;
+              const vv = s.v === 0 || s.v === 1 ? s.v + 27 : s.v;
+              return { ...s, v: vv };
+            })();
+      const { exchangeProxy } = this.signing['addr'].resolve?.() ?? {
+        exchangeProxy: 'unknown',
+      };
+
+      console.log('[orders] verify domain', { chainId, exchangeProxy });
+
       orderHash = this.signing.getOrderHash(chainId, order);
+
       const { valid, recovered } = this.signing.verifySignature(
         chainId,
         order,
-        signature,
+        sigUnion,
       );
 
       if (!valid || !recovered || toLower(recovered) !== makerExpected) {
+        // Minimal diagnostic: compare recovered vs maker, chainId, hash and expiry typing
+        // (Remove after debugging)
+
+        const alt = this.signing.verifySignature(chainId, order, {
+          ...sigUnion,
+          signatureType: SignatureType.ETHSIGN,
+        });
+        console.warn('[orders] invalid_signature (EIP712)', {
+          recovered,
+          altRecovered: alt.recovered,
+          altValid: alt.valid,
+        });
+
+        console.warn('[orders] invalid_signature', {
+          chainId,
+          makerExpected,
+          recovered,
+          orderHash,
+          orderExpiry: order.expiry,
+          expiryType: typeof order.expiry,
+          sigIsHex: typeof (signature as unknown) === 'string',
+          sigLen:
+            typeof (signature as unknown) === 'string'
+              ? (signature as unknown as string).length
+              : 'tuple',
+        });
         throw new BadRequestException('invalid_signature');
       }
     }
@@ -161,7 +256,21 @@ export class OrdersController {
     });
     await this.ob.attachRaw(market.symbol, orderHash, { order, signature });
 
-    return { orderHash, status: res.status };
+    try {
+      const sigHex = toHexSig65(signature);
+      await this.repo.attachRawToOrder({
+        orderHash,
+        order,
+        signature: sigHex, // <- sin any, tipado estricto
+      });
+    } catch (e) {
+      console.warn(
+        '[orders] attachRawToOrder failed:',
+        e instanceof Error ? e.message : String(e),
+      );
+    }
+
+    return { ok: true, orderHash, status: res.status };
   }
 
   /**
@@ -186,6 +295,14 @@ export class OrdersController {
       try {
         const digest = hashMessage(getBytes(orderHash));
         recovered = recoverAddress(digest, signature);
+        console.warn(
+          '[cancel] recovered=',
+          recovered,
+          'maker=',
+          maker,
+          'orderHash=',
+          orderHash,
+        );
       } catch {
         throw new BadRequestException('invalid_signature');
       }
@@ -196,6 +313,42 @@ export class OrdersController {
     }
 
     const out = await this.ob.cancel(marketId, orderHash);
+    if (out.status === 'not_found') {
+      const ctx2 = await this.repo.getTradingContext(marketId);
+      await this.repo.cancelOrder(ctx2.id, orderHash);
+      return { orderHash, status: 'cancelled' as const };
+    }
     return out;
+  }
+  @Post('tx/cancel')
+  async buildCancelTx(@Body() body: { marketId: string; orderHash: string }) {
+    const { marketId, orderHash } = body || ({} as any);
+    if (!marketId || !orderHash) {
+      throw new BadRequestException('marketId and orderHash are required');
+    }
+
+    // Asegura que ob expone getRaw antes de llamarlo (evita no-unsafe-call)
+    const obUnknown: unknown = this.ob;
+    if (!hasGetRaw(obUnknown)) {
+      throw new BadRequestException('getRaw_unavailable');
+    }
+
+    const inMemUnknown = await this.ob.getRaw(marketId, orderHash);
+    let rawOrder: LimitOrder | undefined;
+    if (hasRawOrder(inMemUnknown)) {
+      rawOrder = inMemUnknown.order;
+    }
+
+    if (!rawOrder) {
+      const fromDb = await this.repo.findRawOrderByHash(orderHash);
+      rawOrder = fromDb.zeroExOrder ?? undefined;
+    }
+
+    if (!rawOrder) {
+      throw new BadRequestException('raw_order_not_found');
+    }
+
+    const txData = this.txBuilders.buildCancelLimitOrder(rawOrder);
+    return { ok: true, txData };
   }
 }

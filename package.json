@@ -31,9 +31,19 @@
     "*.{json,md,yml,yaml}": "pnpm exec prettier -w"
   },
   "devDependencies": {
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.4",
     "husky": "^8.0.0",
     "lint-staged": "16.2.6",
     "prettier": "^3.6.2",
     "prisma": "6.19.0"
+  },
+  "dependencies": {
+    "@web3auth/base": "8.12.4",
+    "@web3auth/ethereum-provider": "9.7.0",
+    "@web3auth/modal": "8.12.4",
+    "@web3auth/openlogin-adapter": "8.12.4",
+    "ethers": "6.15.0",
+    "ts-node": "^10.9.2"
   }
 }

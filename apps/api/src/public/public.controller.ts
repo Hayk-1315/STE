@@ -1,9 +1,12 @@
 // apps/api/src/public/public.controller.ts
 import { BadRequestException, Controller, Get, Query } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import { OrderBookService } from '../matching/orderbook.service';
 
 type OBSource = 'snapshot' | 'live';
+
+type OBLevel = { priceTicks: string; sizeBase: string };
+type OBLevelWithTs = OBLevel & { ts?: string };
 
 @Controller()
 export class PublicController {
@@ -38,6 +41,87 @@ export class PublicController {
     }));
   }
 
+  // ---- helpers ----
+
+  // 1) fecha del primer order "PLACED" que casa ese priceTicks (más antiguo)
+  private async attachLevelTs(
+    marketId: string,
+    levels: OBLevel[],
+  ): Promise<OBLevelWithTs[]> {
+    const out: OBLevelWithTs[] = [];
+    for (const l of levels) {
+      const row = await this.prisma.order.findFirst({
+        where: {
+          marketId,
+          status: 'PLACED',
+          priceTicks: BigInt(l.priceTicks),
+          remainingBase: { gt: new Prisma.Decimal(0) },
+        },
+        orderBy: { placedAt: 'asc' },
+        select: { placedAt: true },
+      });
+      out.push({ ...l, ts: row?.placedAt?.toISOString() });
+    }
+    return out;
+  }
+
+  // 2) snapshot “de emergencia” desde DB si el LOB en memoria está vacío
+  private async snapshotFromDb(
+    marketId: string,
+    depthN: number,
+  ): Promise<{ bids: OBLevel[]; asks: OBLevel[] }> {
+    const rows = await this.prisma.order.findMany({
+      where: {
+        marketId,
+        status: 'PLACED',
+        remainingBase: { gt: new Prisma.Decimal(0) },
+      },
+      select: { side: true, priceTicks: true, remainingBase: true },
+    });
+
+    const bidsMap = new Map<string, bigint>();
+    const asksMap = new Map<string, bigint>();
+
+    for (const r of rows) {
+      const px = r.priceTicks.toString();
+      const rem = BigInt(r.remainingBase.toString());
+      if (r.side === 'BUY') {
+        bidsMap.set(px, (bidsMap.get(px) ?? BigInt(0)) + rem);
+      } else {
+        asksMap.set(px, (asksMap.get(px) ?? BigInt(0)) + rem);
+      }
+    }
+
+    const cmpDesc = (a: [string, bigint], b: [string, bigint]) => {
+      const ax = BigInt(a[0]);
+      const bx = BigInt(b[0]);
+      return ax === bx ? 0 : bx > ax ? 1 : -1; // precio desc
+    };
+    const cmpAsc = (a: [string, bigint], b: [string, bigint]) => {
+      const ax = BigInt(a[0]);
+      const bx = BigInt(b[0]);
+      return ax === bx ? 0 : ax > bx ? 1 : -1; // precio asc
+    };
+
+    const bids: OBLevel[] = [...bidsMap.entries()]
+      .sort(cmpDesc)
+      .slice(0, depthN)
+      .map(([priceTicks, size]) => ({
+        priceTicks,
+        sizeBase: size.toString(),
+      }));
+
+    const asks: OBLevel[] = [...asksMap.entries()]
+      .sort(cmpAsc)
+      .slice(0, depthN)
+      .map(([priceTicks, size]) => ({
+        priceTicks,
+        sizeBase: size.toString(),
+      }));
+
+    return { bids, asks };
+  }
+
   // GET /orderbook?symbol=WETH-USDC&depth=25&source=snapshot|live
   @Get('orderbook')
   async orderbook(
@@ -50,30 +134,52 @@ export class PublicController {
     const depthN = Number.isFinite(d) && d > 0 ? d : 25;
     const src: OBSource = source === 'live' ? 'live' : 'snapshot';
 
-    if (src === 'live') {
-      const l2 = this.ob.snapshot(symbol, depthN);
-      return { symbol, source: src, l2 };
-    }
-
+    // marketId para poder anotar fechas
     const m = await this.prisma.market.findUnique({
       where: { symbol },
       select: { id: true },
     });
     if (!m) throw new BadRequestException('market_not_found');
 
+    if (src === 'live') {
+      // 1) intenta LOB en memoria
+      const l2raw = this.ob.snapshot(symbol, depthN);
+      const empty = (l2raw.bids?.length ?? 0) + (l2raw.asks?.length ?? 0) === 0;
+
+      // 2) si está vacío, cae a DB (agrupación por priceTicks)
+      const base = empty
+        ? await this.snapshotFromDb(m.id, depthN)
+        : (l2raw as { bids: OBLevel[]; asks: OBLevel[] });
+
+      const bids = await this.attachLevelTs(m.id, base.bids ?? []);
+      const asks = await this.attachLevelTs(m.id, base.asks ?? []);
+
+      return {
+        symbol,
+        source: src,
+        l2: { bids, asks, ts: new Date().toISOString() },
+      };
+    }
+
+    // snapshot persistido
     const snap = await this.prisma.bookSnapshot.findFirst({
       where: { marketId: m.id },
       orderBy: { ts: 'desc' },
       select: { ts: true, bids: true, asks: true },
     });
-    const l2 = snap
+
+    const raw = snap
       ? {
           bids: (snap.bids as any[]).slice(0, depthN),
           asks: (snap.asks as any[]).slice(0, depthN),
           ts: snap.ts,
         }
       : { bids: [], asks: [], ts: null };
-    return { symbol, source: src, l2 };
+
+    const bids = await this.attachLevelTs(m.id, raw.bids ?? []);
+    const asks = await this.attachLevelTs(m.id, raw.asks ?? []);
+
+    return { symbol, source: src, l2: { bids, asks, ts: raw.ts } };
   }
 
   // GET /trades?symbol=WETH-USDC&limit=50

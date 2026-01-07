@@ -17,6 +17,7 @@ export class DevZeroExController {
       chainId: this.cfg.chainId,
       exchangeProxy,
       allowanceSpender,
+      feeRecipient: this.cfg.feeRecipient,
     };
   }
 }
