@@ -4,6 +4,7 @@ import { Interface } from 'ethers';
 import { ZeroExAddressesService } from './addresses.service';
 import { LimitOrder } from './limit-order.types';
 import { parseZeroExEnv } from './zeroex.config';
+
 const EP_ABI = [
   // fillLimitOrder(LimitOrder, Signature, uint128)
   'function fillLimitOrder((address makerToken,address takerToken,uint128 makerAmount,uint128 takerAmount,uint128 takerTokenFeeAmount,address maker,address taker,address sender,address feeRecipient,bytes32 pool,uint64 expiry,uint256 salt) order,(uint8 signatureType,uint8 v,bytes32 r,bytes32 s) signature,uint128 takerTokenFillAmount) payable returns (uint128 takerTokenFilledAmount, uint128 makerTokenFilledAmount)',
@@ -11,6 +12,11 @@ const EP_ABI = [
   'function cancelLimitOrder((address makerToken,address takerToken,uint128 makerAmount,uint128 takerAmount,uint128 takerTokenFeeAmount,address maker,address taker,address sender,address feeRecipient,bytes32 pool,uint64 expiry,uint256 salt) order)',
   // NEW: batchFillLimitOrders(orders[], signatures[], takerTokenFillAmounts[], revertIfIncomplete)
   'function batchFillLimitOrders((address makerToken,address takerToken,uint128 makerAmount,uint128 takerAmount,uint128 takerTokenFeeAmount,address maker,address taker,address sender,address feeRecipient,bytes32 pool,uint64 expiry,uint256 salt)[] orders,(uint8 signatureType,uint8 v,bytes32 r,bytes32 s)[] signatures,uint128[] takerTokenFillAmounts,bool revertIfIncomplete) payable returns (uint128[] takerTokenFilledAmounts,uint128[] makerTokenFilledAmounts)',
+] as const;
+
+const EP_CANCEL_PAIR_ABI = [
+  // NEW: cancelPairLimitOrders(makerToken, takerToken, minValidSalt)
+  'function cancelPairLimitOrders(address makerToken,address takerToken,uint256 minValidSalt)',
 ] as const;
 
 const epInterface = new Interface(EP_ABI);
@@ -36,7 +42,6 @@ export type ZeroExSig = {
 };
 
 /** Parse 65-byte ECDSA signature hex → {signatureType,v,r,s} */
-// Add explicit return type to help TS inference under strict mode
 function parseSigHexToTuple(
   sigHex: string,
   signatureType: number = 2,
@@ -50,7 +55,6 @@ function parseSigHexToTuple(
   let v = parseInt(hex.slice(128, 130), 16);
   if (v === 0 || v === 1) v += 27;
 
-  // Cast on properties to satisfy the template-literal type strictly
   return {
     signatureType,
     v,
@@ -116,7 +120,7 @@ export class ZeroExTxBuildersService {
     const { exchangeProxy } = this.addr.resolve();
     const chainId = parseZeroExEnv(process.env).chainId;
 
-    // Guard para Base mainnet (y forks de Base)
+    // Guard para Base mainnet (y forks de Base) si el EP no soporta batch en tu despliegue
     if (chainId === 8453) {
       throw new Error(
         '0x batchFillLimitOrders isn’t implemented in the Base Exchange Proxy (chainId 8453). ' +
@@ -140,5 +144,43 @@ export class ZeroExTxBuildersService {
       data: data as `0x${string}`,
       value: '0',
     };
+  }
+
+  // ===== NEW: cancelPairLimitOrders =====
+
+  // Interface dedicada para el método cancelPairLimitOrders
+  private cancelPairIface = new Interface(EP_CANCEL_PAIR_ABI);
+
+  /**
+   * Build calldata for EP.cancelPairLimitOrders(makerToken, takerToken, minValidSalt)
+   * Devuelve TxData listo para firmar/enviar (value = "0").
+   */
+  buildCancelPairLimitOrders(p: {
+    makerToken: `0x${string}`;
+    takerToken: `0x${string}`;
+    minValidSalt: bigint | string;
+  }): TxData {
+    const { exchangeProxy } = this.addr.resolve();
+    const data = this.cancelPairIface.encodeFunctionData(
+      'cancelPairLimitOrders',
+      [p.makerToken, p.takerToken, BigInt(p.minValidSalt)],
+    ) as `0x${string}`;
+    return { to: exchangeProxy as `0x${string}`, data, value: '0' };
+  }
+
+  /**
+   * Alias fino para compatibilidad con controladores que llamen buildCancelPair(...)
+   * Delega en buildCancelPairLimitOrders sin alterar lógica.
+   */
+  buildCancelPair(
+    makerToken: `0x${string}`,
+    takerToken: `0x${string}`,
+    minValidSalt: bigint | string,
+  ): TxData {
+    return this.buildCancelPairLimitOrders({
+      makerToken,
+      takerToken,
+      minValidSalt,
+    });
   }
 }

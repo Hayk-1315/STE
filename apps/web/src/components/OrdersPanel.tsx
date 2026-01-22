@@ -6,6 +6,7 @@ import { subscribeOrders, type OrderEvent } from "@/lib/ws";
 import { useWallet } from "@/providers/wallet";
 import { getOrders, type OrdersListItem } from "@/lib/api";
 import { SkeletonList } from "./Skeleton";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 type Evt =
   | OrderEvent
@@ -120,38 +121,73 @@ export default function OrdersPanel() {
   }, [address]);
 
   if (!address) {
-    return <div className="rounded-2xl p-4 border">Connect wallet to see your order events.</div>;
+    return (
+      <div className="rounded-2xl p-4 border bg-neutral-950 border-neutral-800/80 backdrop-blur text-sm text-neutral-300">
+        Connect wallet to see your order events.
+      </div>
+    );
   }
 
   return (
-    <div className="rounded-2xl p-4 border space-y-2">
-      <h3 className="font-medium">My Orders (live)</h3>
-      {loading && <SkeletonList rows={10} />}
-      <ul className="text-sm space-y-1">
-        {events.length === 0 && !loading ? (
-          <li>—</li>
-        ) : (
-          events.map((e, i) => {
-            const ts = (e.ts ?? "").replace("T", " ").replace("Z", "");
-            const label = e.label ?? e.type; // mostrará "expired" si lo detectamos
-            const color =
-              label === "placed"
-                ? "text-blue-700"
-                : label === "cancelled"
-                  ? "text-red-700"
-                  : label === "expired"
-                    ? "text-amber-700"
-                    : "text-green-700"; // partial_fill / filled
-            return (
-              <li key={`${e.type}:${e.orderHash}:${e.ts ?? i}`} className="grid grid-cols-12 gap-2">
-                <span className="col-span-4 font-mono text-xs text-gray-500">{ts || "—"}</span>
-                <b className={`col-span-2 ${color}`}>{label}</b>
-                <span className="col-span-6 truncate font-mono">{e.orderHash}</span>
-              </li>
-            );
-          })
-        )}
-      </ul>
-    </div>
+    <Card className="bg-neutral-950 border-neutral-800/80 backdrop-blur">
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="text-sm font-semibold tracking-wide text-neutral-100">
+            My Orders
+          </CardTitle>
+          <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-mono uppercase tracking-wide text-emerald-300">
+            live
+          </span>
+        </div>
+        <p className="mt-1 text-xs text-neutral-500">Latest order events from on-chain watcher.</p>
+      </CardHeader>
+
+      <CardContent className="space-y-2 text-sm">
+        {loading && <SkeletonList rows={10} />}
+
+        <ul className="space-y-1.5">
+          {events.length === 0 && !loading ? (
+            <li className="text-xs text-neutral-500">No events yet.</li>
+          ) : (
+            events.map((e, i) => {
+              const ts = (e.ts ?? "").replace("T", " ").replace("Z", "");
+              const label = e.label ?? e.type; // "expired", "partial_fill", etc
+
+              const labelClass =
+                label === "placed"
+                  ? "border-sky-500/40 bg-sky-500/10 text-sky-300"
+                  : label === "cancelled"
+                    ? "border-red-500/40 bg-red-500/10 text-red-300"
+                    : label === "expired"
+                      ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+                      : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"; // filled / partial_fill
+
+              return (
+                <li
+                  key={`${e.type}:${e.orderHash}:${e.ts ?? i}`}
+                  className="grid grid-cols-12 gap-2 rounded-md border border-neutral-800/70 bg-neutral-950/40 px-2 py-1 hover:border-neutral-600/70 transition-colors"
+                >
+                  <span className="col-span-4 font-mono text-[11px] text-neutral-500">
+                    {ts || "—"}
+                  </span>
+
+                  <span className="col-span-3 flex items-center">
+                    <span
+                      className={`inline-flex items-center justify-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${labelClass}`}
+                    >
+                      {label}
+                    </span>
+                  </span>
+
+                  <span className="col-span-5 truncate font-mono text-xs text-neutral-200">
+                    {e.orderHash}
+                  </span>
+                </li>
+              );
+            })
+          )}
+        </ul>
+      </CardContent>
+    </Card>
   );
 }

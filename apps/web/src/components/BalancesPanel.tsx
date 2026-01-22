@@ -250,32 +250,57 @@ export default function BalancesPanel({ market }: Props) {
   }, [getSigner, address, market, load]);
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Balances & Allowances</CardTitle>
+    <Card className="bg-neutral-950 border-neutral-800/80 backdrop-blur">
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="text-sm font-semibold tracking-wide text-neutral-100">
+            Balances & Allowances
+          </CardTitle>
+          {market && (
+            <span className="rounded-full border border-neutral-700 bg-neutral-900/70 px-2 py-0.5 text-[10px] font-mono text-neutral-300">
+              {market.base.symbol}/{market.quote.symbol}
+            </span>
+          )}
+        </div>
+        <p className="mt-1 text-xs text-neutral-500">
+          Wallet balances and 0x allowance status for this market.
+        </p>
       </CardHeader>
-      <CardContent className="space-y-2 text-sm">
+
+      <CardContent className="space-y-3 text-sm text-neutral-100">
         {!address ? (
-          <div>Connect wallet to view balances.</div>
+          <div className="rounded-md border border-dashed border-neutral-700 bg-neutral-900/40 px-3 py-2 text-xs text-neutral-400">
+            Connect wallet to view balances.
+          </div>
         ) : !market ? (
-          <div>Loading market…</div>
+          <div className="text-xs text-neutral-400">Loading market…</div>
         ) : !data ? (
-          <div>{loading ? "Loading…" : "—"}</div>
+          <div className="text-xs text-neutral-400">{loading ? "Loading…" : "—"}</div>
         ) : (
           <>
-            <div className="grid grid-cols-3 gap-2">
-              <div className="text-gray-500">ETH</div>
-              <div className="col-span-2 font-mono text-right">{data.eth}</div>
+            {/* ETH row */}
+            <div className="rounded-lg border border-neutral-800/70 bg-neutral-950/40 px-3 py-2 space-y-1">
+              <div className="flex items-center justify-between text-xs text-neutral-400">
+                <span>ETH balance</span>
+                <span className="font-mono text-neutral-100">{data.eth}</span>
+              </div>
+            </div>
 
-              <div className="text-gray-500">{market.base.symbol} bal</div>
-              <div className="col-span-2 font-mono text-right">{data.base.bal}</div>
+            {/* Base token */}
+            <div className="rounded-lg border border-neutral-800/70 bg-neutral-950/40 px-3 py-2 space-y-2">
+              <div className="flex items-center justify-between text-xs text-neutral-400">
+                <span>{market.base.symbol} balance</span>
+                <span className="font-mono text-neutral-100">{data.base.bal}</span>
+              </div>
 
-              <div className="text-gray-500">{market.base.symbol} allowance</div>
-              <div className="col-span-2 font-mono text-right">
-                <div>{data.base.alw}</div>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="text-[11px] text-neutral-500">Allowance</div>
+                  <div className="font-mono text-xs text-neutral-200">{data.base.alw}</div>
+                </div>
 
                 {data.spender && (
-                  <div className="mt-1 flex justify-end gap-1 font-sans">
+                  <div className="mt-1 flex flex-wrap justify-end gap-1 font-sans">
                     <Button
                       size="sm"
                       variant="outline"
@@ -303,6 +328,7 @@ export default function BalancesPanel({ market }: Props) {
                     >
                       Custom
                     </Button>
+
                     <Button
                       size="sm"
                       variant="outline"
@@ -322,16 +348,23 @@ export default function BalancesPanel({ market }: Props) {
                   </div>
                 )}
               </div>
+            </div>
 
-              <div className="text-gray-500">{market.quote.symbol} bal</div>
-              <div className="col-span-2 font-mono text-right">{data.quote.bal}</div>
+            {/* Quote token */}
+            <div className="rounded-lg border border-neutral-800/70 bg-neutral-950/40 px-3 py-2 space-y-2">
+              <div className="flex items-center justify-between text-xs text-neutral-400">
+                <span>{market.quote.symbol} balance</span>
+                <span className="font-mono text-neutral-100">{data.quote.bal}</span>
+              </div>
 
-              <div className="text-gray-500">{market.quote.symbol} allowance</div>
-              <div className="col-span-2 font-mono text-right">
-                <div>{data.quote.alw}</div>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="text-[11px] text-neutral-500">Allowance</div>
+                  <div className="font-mono text-xs text-neutral-200">{data.quote.alw}</div>
+                </div>
 
                 {data.spender && (
-                  <div className="mt-1 flex justify-end gap-1 font-sans">
+                  <div className="mt-1 flex flex-wrap justify-end gap-1 font-sans">
                     <Button
                       size="sm"
                       variant="outline"
@@ -359,6 +392,7 @@ export default function BalancesPanel({ market }: Props) {
                     >
                       Custom
                     </Button>
+
                     <Button
                       size="sm"
                       variant="outline"
@@ -379,9 +413,11 @@ export default function BalancesPanel({ market }: Props) {
                 )}
               </div>
             </div>
+
             {data.spender && (
-              <div className="text-xs text-gray-500 mt-1">
-                Spender (0x Allowance Target): <span className="font-mono">{data.spender}</span>
+              <div className="text-[11px] text-neutral-500 mt-1">
+                Spender (0x Allowance Target):{" "}
+                <span className="font-mono text-neutral-300">{data.spender}</span>
               </div>
             )}
           </>

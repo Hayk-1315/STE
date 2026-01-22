@@ -1,0 +1,16 @@
+{
+  "ulid": "01KFKMTQ1V5PS6MXPVMG0F11TE",
+  "minTime": 1769028500323,
+  "maxTime": 1769032800000,
+  "stats": {
+    "numSamples": 133,
+    "numFloatSamples": 133,
+    "numSeries": 133,
+    "numChunks": 133
+  },
+  "compaction": {
+    "level": 1,
+    "sources": ["01KFKMTQ1V5PS6MXPVMG0F11TE"]
+  },
+  "version": 1
+}

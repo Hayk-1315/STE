@@ -72,8 +72,8 @@ export default function MakerHints({
   );
 
   return (
-    <div className="text-xs mt-2 space-y-1">
-      <div className="flex flex-wrap gap-2">
+    <div className="mt-3 space-y-1 text-[11px]">
+      <div className="flex flex-wrap gap-1.5">
         <Badge label={`Tick ${tickHuman} ${market.quote.symbol}`} bad={tickBad} />
         <Badge label={`Min size ≥ ${minSizeHuman} ${market.base.symbol}`} bad={minSizeBad} />
         <Badge
@@ -81,18 +81,21 @@ export default function MakerHints({
           bad={minNotionalBad}
         />
         {!tickBad && !minSizeBad && !minNotionalBad && (
-          <span className="text-green-700">✓ Input válido</span>
+          <span className="flex items-center gap-1 text-emerald-300">
+            <span>✓</span>
+            <span>Input válido</span>
+          </span>
         )}
       </div>
 
       {notionalHuman && (
-        <div className="text-gray-600">
-          Notional ≈ {notionalHuman} {market.quote.symbol}
+        <div className="text-neutral-400">
+          Notional ≈ <span className="font-mono">{notionalHuman}</span> {market.quote.symbol}
         </div>
       )}
 
       {!makerValidation.ok && errs.length > 0 && (
-        <ul className="list-disc ml-4 text-red-700">
+        <ul className="ml-4 list-disc space-y-0.5 text-rose-300">
           {errs.map((e, i) => (
             <li key={i}>{e}</li>
           ))}

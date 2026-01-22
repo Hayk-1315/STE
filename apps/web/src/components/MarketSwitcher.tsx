@@ -49,20 +49,23 @@ export default function MarketSwitcher({ currentSymbol }: { currentSymbol?: stri
   const hasCurrent = mkts.some((m) => m.symbol.toUpperCase() === value);
 
   return (
-    <select
-      className="border rounded px-2 py-1 text-sm"
-      aria-label="Select market"
-      title="Select market"
-      value={hasCurrent ? value : ""}
-      onChange={onChange}
-      disabled={loading || mkts.length === 0}
-    >
-      <option value="">{loading ? "Loading markets…" : "Select market"}</option>
-      {mkts.map((m) => (
-        <option key={m.id ?? m.symbol} value={m.symbol.toUpperCase()}>
-          {m.symbol.toUpperCase()}
-        </option>
-      ))}
-    </select>
+    <div className="mt-3 flex items-center gap-2 text-sm">
+      <span className="text-neutral-400">Market</span>
+      <select
+        className="border border-neutral-700 bg-neutral-900 rounded-lg px-2 py-1 text-sm font-mono flex-shrink-0"
+        aria-label="Select market"
+        title="Select market"
+        value={hasCurrent ? value : ""}
+        onChange={onChange}
+        disabled={loading || mkts.length === 0}
+      >
+        <option value="">{loading ? "Loading markets…" : "Select market"}</option>
+        {mkts.map((m) => (
+          <option key={m.id ?? m.symbol} value={m.symbol.toUpperCase()}>
+            {m.symbol.toUpperCase()}
+          </option>
+        ))}
+      </select>
+    </div>
   );
 }

@@ -53,7 +53,7 @@ export class PublicController {
       const row = await this.prisma.order.findFirst({
         where: {
           marketId,
-          status: 'PLACED',
+          status: { in: ['PLACED', 'PARTIALLY_FILLED'] },
           priceTicks: BigInt(l.priceTicks),
           remainingBase: { gt: new Prisma.Decimal(0) },
         },
@@ -73,7 +73,7 @@ export class PublicController {
     const rows = await this.prisma.order.findMany({
       where: {
         marketId,
-        status: 'PLACED',
+        status: { in: ['PLACED', 'PARTIALLY_FILLED'] },
         remainingBase: { gt: new Prisma.Decimal(0) },
       },
       select: { side: true, priceTicks: true, remainingBase: true },
@@ -142,14 +142,8 @@ export class PublicController {
     if (!m) throw new BadRequestException('market_not_found');
 
     if (src === 'live') {
-      // 1) intenta LOB en memoria
-      const l2raw = this.ob.snapshot(symbol, depthN);
-      const empty = (l2raw.bids?.length ?? 0) + (l2raw.asks?.length ?? 0) === 0;
-
-      // 2) si está vacío, cae a DB (agrupación por priceTicks)
-      const base = empty
-        ? await this.snapshotFromDb(m.id, depthN)
-        : (l2raw as { bids: OBLevel[]; asks: OBLevel[] });
+      // Siempre desde BD para evitar “fantasmas” tras clear-dev
+      const base = await this.snapshotFromDb(m.id, depthN);
 
       const bids = await this.attachLevelTs(m.id, base.bids ?? []);
       const asks = await this.attachLevelTs(m.id, base.asks ?? []);

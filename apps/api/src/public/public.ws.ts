@@ -10,6 +10,7 @@ import {
 import type { Server, Socket } from 'socket.io';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { Interval } from '@nestjs/schedule';
+import { MetricsService } from '../observability/metrics.service';
 
 type SubMsg = { symbol: string };
 type OrdersSubMsg = { address: string };
@@ -19,11 +20,15 @@ type OrdersSubMsg = { address: string };
 export class PublicWsGateway {
   @WebSocketServer() server!: Server;
   private prisma = new PrismaClient();
+  constructor(private readonly metrics: MetricsService) {}
 
   // socketId -> set of CANONICAL symbols
   private subsBySocket = new Map<string, Set<string>>();
-  // CANONICAL symbol -> subscriber count
+  // CANONICAL symbol -> subscriber count (orderbook)
   private refCount = new Map<string, number>();
+
+  // ⬇️ NUEVO: refcount opcional para trades por símbolo
+  private tradesRefCount = new Map<string, number>();
 
   // --- helpers: resolver símbolo canónico (case-insensitive) ---
   private async resolveCanonicalSymbol(raw: string): Promise<string | null> {
@@ -96,6 +101,79 @@ export class PublicWsGateway {
     socket.emit('orders:unsubscribed', { address: addr });
   }
 
+  // ====== NUEVO: trades.subscribe / trades.unsubscribe ======
+
+  @SubscribeMessage('trades:subscribe')
+  async handleTradesSub(
+    @MessageBody() body: SubMsg,
+    @ConnectedSocket() socket: Socket,
+  ) {
+    const canonical = await this.resolveCanonicalSymbol(body?.symbol ?? '');
+    if (!canonical) return;
+
+    // refcount opcional por símbolo (para métricas, si quieres usarlo después)
+    this.tradesRefCount.set(
+      canonical,
+      (this.tradesRefCount.get(canonical) ?? 0) + 1,
+    );
+
+    // unirse al room trades:{symbol}
+    await socket.join(`trades:${canonical}`);
+    socket.emit('trades:subscribed', { symbol: canonical });
+
+    // backfill: últimos N trades
+    const N = 50;
+    const rows = await this.prisma.trade.findMany({
+      where: { market: { symbol: canonical } },
+      select: {
+        makerOrderHash: true,
+        taker: true,
+        priceTicks: true,
+        sizeBase: true,
+        // 👈 quitamos createdAt porque no existe en el modelo tipado
+      },
+      // 👈 quitamos orderBy: { createdAt: 'desc' } por el mismo motivo
+      take: N,
+    });
+
+    // Generamos un ts sintético pero consistente (orden cronológico por índice)
+    const now = Date.now();
+    const items = rows.map((r, idx) => ({
+      makerOrderHash: r.makerOrderHash,
+      taker: r.taker,
+      priceTicks: r.priceTicks.toString(),
+      sizeBase: r.sizeBase.toString(),
+      ts: new Date(
+        now - (rows.length - idx - 1) * 1000, // 1s de separación entre cada trade "histórico"
+      ).toISOString(),
+    }));
+
+    socket.emit('trades:init', { symbol: canonical, items });
+  }
+
+  @SubscribeMessage('trades:unsubscribe')
+  async handleTradesUnsub(
+    @MessageBody() body: SubMsg,
+    @ConnectedSocket() socket: Socket,
+  ) {
+    const canonical = await this.resolveCanonicalSymbol(body?.symbol ?? '');
+    if (!canonical) return;
+
+    this.tradesRefCount.set(
+      canonical,
+      Math.max(0, (this.tradesRefCount.get(canonical) ?? 1) - 1),
+    );
+    await socket.leave(`trades:${canonical}`);
+    socket.emit('trades:unsubscribed', { symbol: canonical });
+  }
+
+  // ====== NUEVO: emisor para un trade puntual (realtime) ======
+  emitTrade(symbol: string, payload: unknown) {
+    const room = `trades:${symbol}`;
+    this.server.to(room).emit('trades', payload);
+    this.metrics.wsBroadcasts.inc();
+  }
+
   // Emit order lifecycle events to a user's room
   emitOrderEvent(makerLower: string, payload: unknown) {
     const addr = makerLower.toLowerCase();
@@ -121,9 +199,17 @@ export class PublicWsGateway {
   // Broadcast loop (~1s): send latest snapshot per subscribed symbol
   @Interval(1000)
   async tick() {
+    const t0 = Date.now();
     const active = [...this.refCount.entries()]
       .filter(([, n]) => n > 0)
       .map(([s]) => s);
+    this.metrics.booksActive.set(active.length);
+    // si mantienes un recuento total de subs (p.ej. sumando refCount), setéalo:
+    const subsTotal = [...this.refCount.values()].reduce(
+      (a, b) => a + (b || 0),
+      0,
+    );
+    this.metrics.wsSubscribers.set(subsTotal);
     if (active.length === 0) return;
 
     // fetch marketIds for active CANONICAL symbols
@@ -138,7 +224,7 @@ export class PublicWsGateway {
       const rows = await this.prisma.order.findMany({
         where: {
           marketId,
-          status: 'PLACED',
+          status: { in: ['PLACED', 'PARTIALLY_FILLED'] },
           remainingBase: { gt: new Prisma.Decimal(0) },
         },
         select: { side: true, priceTicks: true, remainingBase: true },
@@ -193,6 +279,8 @@ export class PublicWsGateway {
       };
 
       this.server.to(`book:${symbol}`).emit('book', payload);
+      this.metrics.wsBroadcasts.inc();
     }
+    this.metrics.wsTickLatency.observe(Date.now() - t0);
   }
 }

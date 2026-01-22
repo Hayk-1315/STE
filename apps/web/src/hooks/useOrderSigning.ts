@@ -11,9 +11,14 @@ import {
 } from "ethers";
 import { env, zeroExEP } from "@/lib/env";
 import { useWallet } from "@/providers/wallet";
-import { Market, postOrder } from "@/lib/api";
+// ⬇️ añadimos fetchTopOfBook
+import { Market, postOrder, fetchTopOfBook } from "@/lib/api";
 import { toast } from "sonner";
 import { postBuildCancelTx } from "@/lib/api";
+
+const FEE_BPS = Number(process.env.NEXT_PUBLIC_TAKER_FEE_BPS || "0");
+const FEE_RECIPIENT = (process.env.NEXT_PUBLIC_TAKER_FEE_RECIPIENT ||
+  "0x0000000000000000000000000000000000000000") as `0x${string}`;
 
 type Side = "BUY" | "SELL";
 
@@ -23,6 +28,8 @@ type PlaceParams = {
   sizeBaseHuman: string; // e.g., "0.5"
   priceHuman: string; // e.g., "2500" (quote per 1 base)
   expirySec?: number;
+  // ⬇️ NUEVO: flag opcional para post-only
+  postOnly?: boolean;
 };
 
 type LimitOrder = {
@@ -140,6 +147,22 @@ function computeAmounts(params: PlaceParams, makerAddress: string) {
   };
 }
 
+/**
+ * Calcula priceTicks a partir de priceHuman y priceTickQ,
+ * usando la misma relación que el backend:
+ * priceTicks = (price * 10^quoteDecimals) / priceTickQ
+ */
+function computePriceTicks(p: PlaceParams): bigint {
+  const { market, priceHuman } = p;
+  const quoteDec = market.quote.decimals;
+  const priceScaled = ethers.parseUnits(priceHuman, quoteDec); // price * 10^quoteDec
+  const tickQ = BigInt(market.rules.priceTickQ);
+  if (tickQ <= BigInt(0)) {
+    throw new Error("invalid_price_tickQ");
+  }
+  return priceScaled / tickQ;
+}
+
 export function useOrderSigning() {
   const { address, signTypedData, personalSign, getSigner } = useWallet();
 
@@ -155,20 +178,38 @@ export function useOrderSigning() {
       const domain = await getZeroExDomain();
 
       const amounts = computeAmounts(p, address);
-      const expirySec = p.expirySec ?? Math.floor(Date.now() / 1000) + 24 * 60 * 60;
-      const saltHex = ethers.hexlify(ethers.randomBytes(16));
-      const salt = BigInt(saltHex).toString();
+      // fee en takerToken (proporcional a takerAmount)
+      const takerAmountBig = BigInt(amounts.takerAmount);
+      const feeAmtBig =
+        FEE_BPS > 0 ? (takerAmountBig * BigInt(FEE_BPS)) / BigInt(10000) : BigInt(0);
+
+      const takerTokenFeeAmount = feeAmtBig.toString();
+      const feeRecipient = FEE_BPS > 0 ? FEE_RECIPIENT : ZERO;
+
+      const nowSec = Math.floor(Date.now() / 1000);
+      const ttl =
+        typeof p.expirySec === "number" && Number.isFinite(p.expirySec) && p.expirySec > 0
+          ? p.expirySec
+          : 24 * 60 * 60; // por defecto, 24h
+      const expirySec = nowSec + ttl;
+      // Siempre mayor que 2^128 para no chocar con cancelPair previo
+      const SALT_OFFSET = BigInt(1) << BigInt(128); // 2^128
+      const nowSec1 = BigInt(Math.floor(Date.now() / 1000));
+      const rand96 = BigInt("0x" + ethers.hexlify(ethers.randomBytes(12)).slice(2)); // 96 bits
+      // Distribución: [ nowSec:32 | rand96:96 ] + OFFSET → siempre >= 2^128, y además monótono por tiempo
+      const saltBig = SALT_OFFSET + (nowSec1 << BigInt(96)) + rand96;
+      const salt = saltBig.toString();
 
       const order: LimitOrder = {
         makerToken: amounts.makerToken,
         takerToken: amounts.takerToken,
         makerAmount: amounts.makerAmount,
         takerAmount: amounts.takerAmount,
-        takerTokenFeeAmount: "0",
+        takerTokenFeeAmount,
         taker: ZERO,
         maker: amounts.maker,
         sender: ZERO,
-        feeRecipient: ZERO,
+        feeRecipient,
         pool: ZERO32,
         expiry: String(expirySec),
         salt,
@@ -181,6 +222,33 @@ export function useOrderSigning() {
 
   const placeLimit = useCallback(
     async (p: PlaceParams) => {
+      // ⬇️ PRE-CHEQUEO postOnly en el front: evitamos firmar si seguro cruzaría
+      if (p.postOnly) {
+        try {
+          const pxTicks = computePriceTicks(p);
+          const top = await fetchTopOfBook(p.market.symbol);
+
+          const bestBidTicks =
+            top.bestBid && top.bestBid.priceTicks != null ? BigInt(top.bestBid.priceTicks) : null;
+          const bestAskTicks =
+            top.bestAsk && top.bestAsk.priceTicks != null ? BigInt(top.bestAsk.priceTicks) : null;
+
+          const wouldCross =
+            p.side === "BUY"
+              ? bestAskTicks !== null && pxTicks >= bestAskTicks
+              : bestBidTicks !== null && pxTicks <= bestBidTicks;
+
+          if (wouldCross) {
+            toast.error("Post-only: this order would cross the current top of book.");
+            // No firmamos ni llamamos al backend
+            return;
+          }
+        } catch (e) {
+          // Si el pre-check falla (sin top-of-book, etc.), dejamos que el backend decida.
+          console.warn("[placeLimit] postOnly pre-check failed, letting backend decide:", e);
+        }
+      }
+
       const { domain, types, order } = await buildOrder(p);
 
       console.info("[sign-limit] will sign", {
@@ -207,7 +275,11 @@ export function useOrderSigning() {
 
       if (address && recovered712.toLowerCase() === address.toLowerCase()) {
         // OK: EIP-712 correcto → enviamos string hex
-        const res = await postOrder({ order, signature: sig712 });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const payload: any = p.postOnly
+          ? { order, signature: sig712, postOnly: true }
+          : { order, signature: sig712 };
+        const res = await postOrder(payload);
         toast.success("Order placed", { description: res.orderHash });
         return res;
       }
@@ -218,10 +290,11 @@ export function useOrderSigning() {
       const { v, r, s } = splitSigHex(sigEth);
 
       // Enviamos tupla con signatureType=ETHSIGN (3)
-      const res = await postOrder({
-        order,
-        signature: { signatureType: 3, v, r, s },
-      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const payload: any = p.postOnly
+        ? { order, signature: { signatureType: 3, v, r, s }, postOnly: true }
+        : { order, signature: { signatureType: 3, v, r, s } };
+      const res = await postOrder(payload);
       toast.success("Order placed (eth_sign)", { description: res.orderHash });
       return res;
     },
@@ -254,7 +327,7 @@ export function useOrderSigning() {
       // ⬅️ ya no disparamos /cancel off-chain
       return { ok: true };
     },
-    [address, getSigner], // ⬅️ quita personalSign del array de deps
+    [address, getSigner],
   );
 
   // (opcional) dejas este helper por si lo llamas en otra parte

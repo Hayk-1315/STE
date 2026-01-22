@@ -74,11 +74,15 @@ export default function ChainBadge() {
   const label = cid?.toString() ?? "—";
   return (
     <span
-      className={`text-sm px-2 py-1 rounded ${
-        ok ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"
+      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${
+        ok
+          ? "bg-emerald-500/10 text-emerald-300 border border-emerald-500/40"
+          : "bg-amber-500/10 text-amber-300 border border-amber-500/40"
       }`}
     >
-      Chain: {label} {ok ? "" : "(switch?)"}
+      <span className="h-1.5 w-1.5 rounded-full bg-current" />
+      <span>{label}</span>
+      {!ok && <span className="opacity-70 text-[10px]">(switch?)</span>}
     </span>
   );
 }

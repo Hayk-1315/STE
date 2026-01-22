@@ -12,15 +12,15 @@ export default function AccountBadge() {
   if (!address) return null;
 
   return (
-    <div className="flex items-center gap-2 text-sm rounded border px-2 py-1">
-      <span className="font-mono">{short(address)}</span>
-      <span className="text-gray-500">({source ?? "wallet"})</span>
+    <div className="inline-flex items-center gap-2 rounded-full border border-neutral-700 bg-neutral-900/70 px-3 py-1 text-xs">
+      <span className="font-mono text-[11px]">{short(address)}</span>
+      <span className="text-neutral-500 text-[11px]">({source ?? "wallet"})</span>
       <button
-        className="text-xs underline"
+        className="text-[10px] uppercase tracking-wide text-neutral-400 hover:text-neutral-200"
         onClick={() => navigator.clipboard.writeText(address)}
         title="Copy address"
       >
-        copy
+        Copy
       </button>
     </div>
   );

@@ -26,7 +26,7 @@ export default function OrderbookTable({
 
   return (
     <div>
-      <div className="grid grid-cols-3 text-xs text-gray-500 mb-1">
+      <div className="grid grid-cols-3 text-[10px] sm:text-xs text-neutral-500 mb-1 uppercase tracking-wide">
         <div className="text-right col-span-1">Price ({quoteSym})</div>
         <div className="text-right col-span-1">Size ({baseSym})</div>
         <div className="text-right col-span-1">Placed</div>
@@ -34,7 +34,7 @@ export default function OrderbookTable({
 
       <ul className="space-y-1">
         {levels.length === 0 ? (
-          <li>—</li>
+          <li className="text-xs text-neutral-500">—</li>
         ) : (
           levels.map((l, i) => {
             // lee ts cacheado (si no existe, NO pintamos nada)
@@ -43,16 +43,22 @@ export default function OrderbookTable({
             return (
               <li
                 key={i}
-                className="grid grid-cols-3 items-center font-mono hover:bg-neutral-50 rounded px-1 cursor-default"
+                className={`grid grid-cols-3 items-center font-mono rounded px-1 py-0.5 cursor-pointer transition-colors ${
+                  side === "bids" ? "hover:bg-emerald-950/40" : "hover:bg-rose-950/40"
+                }`}
                 onClick={onTake ? () => onTake(l) : undefined}
               >
                 <div
-                  className={`text-right ${side === "bids" ? "text-green-700" : "text-red-700"}`}
+                  className={`text-right ${side === "bids" ? "text-emerald-400" : "text-rose-400"}`}
                 >
                   {fmtPriceFromTicks(l.priceTicks, tickQ, quoteDec)}
                 </div>
-                <div className="text-right">{fmtSizeBase(l.sizeBase, baseDec)}</div>
-                <div className="text-right text-xs text-gray-500">
+
+                <div className="text-right text-neutral-100">
+                  {fmtSizeBase(l.sizeBase, baseDec)}
+                </div>
+
+                <div className="text-right text-[10px] sm:text-xs text-neutral-500">
                   {tsIso ? new Date(tsIso).toLocaleString() : "—"}
                 </div>
               </li>

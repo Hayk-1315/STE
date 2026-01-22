@@ -16,6 +16,7 @@ import type { ZeroExConfig } from '../zeroex/zeroex.config';
 // --- FS helpers para “catch-up” de bloques ---
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve as pathResolve } from 'node:path';
+import { MetricsService } from '../observability/metrics.service';
 
 function loadCursor(file: string): number | null {
   try {
@@ -105,7 +106,6 @@ export class FillWatcherService implements OnModuleInit, OnModuleDestroy {
   private readonly provider: JsonRpcProvider;
   private readonly fillSelector: `0x${string}`;
   private readonly enabled: boolean;
-  private readonly debug: boolean;
   private readonly chainId: number;
   private lastScanned = 0;
   private timer?: ReturnType<typeof setInterval>;
@@ -123,11 +123,10 @@ export class FillWatcherService implements OnModuleInit, OnModuleDestroy {
     private readonly signing: ZeroExSigningService,
     private readonly ob: OrderBookService,
     private readonly repo: PersistenceRepository,
+    private readonly metrics: MetricsService,
     @Inject('ZEROEX_CONFIG') cfg: ZeroExConfig,
   ) {
-    // flags
     this.enabled = (process.env.DEV_ONCHAIN_WATCHER ?? '') === '1';
-    this.debug = (process.env.DEBUG_WATCHER ?? '') === '1';
 
     // provider
     const rpc: string =
@@ -156,12 +155,24 @@ export class FillWatcherService implements OnModuleInit, OnModuleDestroy {
       this.log.log('disabled (DEV_ONCHAIN_WATCHER!=1)');
       return;
     }
+
     const latest = await this.provider.getBlockNumber();
     const persisted = loadCursor(this.cursorFile);
-    const back = Math.max(0, latest - 50); // reescanea ~50 bloques
-    this.lastScanned = persisted && persisted <= latest ? persisted : back;
 
-    // callback sin `async` → no retorna Promise
+    if (persisted && persisted <= latest) {
+      // Reanuda exactamente donde lo dejaste la última vez
+      this.lastScanned = persisted;
+    } else {
+      // Sin cursor previo → arranca muy cerca de head (evita duplicados masivos)
+      this.lastScanned = Math.max(0, latest - 1);
+      saveCursor(this.cursorFile, this.lastScanned);
+    }
+
+    this.log.log(`started at block ${this.lastScanned}`);
+    this.log.log(
+      `boot: ep=${this.addr.resolve().exchangeProxy.toLowerCase()} selector=${this.fillSelector}`,
+    );
+
     this.timer = setInterval((): void => {
       if (!this.enabled) return;
       if (this.running) return;
@@ -174,8 +185,6 @@ export class FillWatcherService implements OnModuleInit, OnModuleDestroy {
           this.running = false;
         });
     }, 2000);
-
-    this.log.log(`started at block ${this.lastScanned}`);
   }
 
   onModuleDestroy(): void {
@@ -236,16 +245,16 @@ export class FillWatcherService implements OnModuleInit, OnModuleDestroy {
             ? (tx.hash as `0x${string}`)
             : ('' as const);
 
+        const rawData =
+          typeof tx.input === 'string'
+            ? tx.input
+            : typeof (tx as Record<string, unknown>).data === 'string'
+              ? (tx as Record<string, unknown>).data
+              : '0x';
         const dataHex: `0x${string}` =
-          typeof tx.input === 'string' && tx.input.startsWith('0x')
-            ? (tx.input as `0x${string}`)
+          typeof rawData === 'string' && rawData.startsWith('0x')
+            ? (rawData as `0x${string}`)
             : ('0x' as const);
-
-        if (this.debug) {
-          this.log.debug(
-            `tx.to=${to} ep=${ep} data[:10]=${dataHex.slice(0, 10)}`,
-          );
-        }
 
         if (!dataHex.startsWith(this.fillSelector)) continue;
 
@@ -287,8 +296,9 @@ export class FillWatcherService implements OnModuleInit, OnModuleDestroy {
             );
             continue;
           }
+          const baseLower = m.baseAddress.toLowerCase();
 
-          const isSellBase = mk === m.baseAddress;
+          const isSellBase = mk === baseLower;
           const execBase: bigint = isSellBase
             ? (takerFill * zxOrder.makerAmount) / zxOrder.takerAmount
             : takerFill;
@@ -302,18 +312,15 @@ export class FillWatcherService implements OnModuleInit, OnModuleDestroy {
             orderHash.toLowerCase() +
             ':' +
             execBase.toString();
-          if (this.seen.has(dkey)) {
-            if (this.debug) this.log.debug(`dedup skip ${dkey}`);
-            continue;
-          }
+          if (this.seen.has(dkey)) continue;
 
           // --- calcula priceTicks para Recent trades ---
-          const ctx = await this.repo.getTradingContext(m.symbol);
+          const ctx = await this.repo.getTradingContext(m.id);
           const makerAmt = zxOrder.makerAmount;
           const takerAmt = zxOrder.takerAmount;
 
           const priceTicks: bigint =
-            mk === m.baseAddress
+            mk === baseLower
               ? (takerAmt * pow10(ctx.baseDecimals)) /
                 (makerAmt * ctx.priceTickQ)
               : (makerAmt * pow10(ctx.baseDecimals)) /
@@ -340,6 +347,8 @@ export class FillWatcherService implements OnModuleInit, OnModuleDestroy {
             orderHash,
             execBase,
           );
+          this.metrics.fillsTotal.inc({ status: res.status });
+
           this.log.log(
             `on-chain fill reconciled → ${res.status} ${orderHash} sizeBase=${execBase.toString()}`,
           );

@@ -1,0 +1,12 @@
+# HELP ste_orders_total Total order lifecycle events
+# TYPE ste_orders_total counter
+ste_orders_total{type="placed"} 0
+ste_orders_total{type="cancelled"} 0
+ste_orders_total{type="partial_fill"} 0
+ste_orders_total{type="filled"} 0
+ste_orders_total{type="expired"} 0
+
+# HELP ste_uptime_seconds Process uptime in seconds
+# TYPE ste_uptime_seconds gauge
+ste_uptime_seconds 1623
+

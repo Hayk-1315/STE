@@ -8,9 +8,11 @@ import { MatchController } from './match.controller';
 import { OrdersQueryController } from './orders.query.controller';
 import { CancelWatcherService } from '../onchain/cancel-watcher.service';
 import { HealthController } from './health.controller';
+import { MetricsModule } from '../observability/metrics.module';
+import { ShadowChecksService } from '../observability/shadow-checks.service';
 
 @Module({
-  imports: [ZeroExModule],
+  imports: [ZeroExModule, MetricsModule],
   controllers: [
     PublicController,
     OrdersController,
@@ -18,7 +20,7 @@ import { HealthController } from './health.controller';
     OrdersQueryController,
     HealthController,
   ],
-  providers: [PublicWsGateway, CancelWatcherService],
+  providers: [PublicWsGateway, CancelWatcherService, ShadowChecksService],
   exports: [PublicWsGateway],
 })
 export class PublicModule {}

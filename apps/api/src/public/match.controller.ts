@@ -13,11 +13,15 @@ import type { TxData } from '../zeroex/tx-builders.service';
 import { PersistenceRepository } from '../matching/persistence.repository';
 import type { LimitOrder } from '../zeroex/limit-order.types';
 import type { ZeroExSig } from '../zeroex/tx-builders.service';
+import { MetricsService } from '../observability/metrics.service';
+
+type TIF = 'GTC' | 'IOC' | 'FOK';
 
 type QuoteReq = {
   marketId: string; // id o symbol (usamos como "marketIdOrSymbol")
   side: Side; // "BUY" | "SELL" (taker perspective on BASE)
   sizeBase: string | number; // raw base units
+  tif?: TIF; // default GTC
 };
 
 const ZERO_ADDR = '0x0000000000000000000000000000000000000000' as const;
@@ -92,10 +96,12 @@ export class MatchController {
     private readonly ob: OrderBookService,
     private readonly txb: ZeroExTxBuildersService,
     private readonly persistence: PersistenceRepository,
+    private readonly metrics: MetricsService,
   ) {}
 
   @Post('match/quote')
   async quote(@Body() b: QuoteReq) {
+    const t0 = Date.now();
     if (
       !b?.marketId ||
       !b?.side ||
@@ -110,6 +116,9 @@ export class MatchController {
       typeof b.sizeBase === 'string' ? b.sizeBase : String(b.sizeBase),
     );
 
+    // ⇩⇩ NUEVO: TIF con default GTC
+    const tif: TIF = (b.tif as TIF) ?? 'GTC';
+
     const plan = await this.ob.quote({
       marketIdOrSymbol: b.marketId,
       side: side as Side,
@@ -121,8 +130,7 @@ export class MatchController {
 
     let noTxReason: string | undefined;
 
-    // --- NUEVO: chequear liquidez disponible vs lo solicitado ---
-    // requestedBase ya lo tienes como BigInt(sizeBase)
+    // --- chequear liquidez disponible vs lo solicitado ---
     const requestedBase = sizeBase;
     const availableBase = Array.isArray(plan.fills)
       ? plan.fills.reduce((acc, f) => acc + BigInt(f.sizeBase), 0n)
@@ -130,17 +138,19 @@ export class MatchController {
     const shortfallBase =
       requestedBase > availableBase ? requestedBase - availableBase : 0n;
 
-    // si falta liquidez, NO construimos txData (ni single ni batch),
-    // devolvemos el plan con motivo y métricas para el front
-    if (shortfallBase > 0n) {
-      noTxReason = 'insufficient_liquidity';
+    // ⇩⇩ NUEVO: semántica FOK → si falta liquidez, rechazamos
+    if (tif === 'FOK' && shortfallBase > 0n) {
+      this.metrics.quotesTotal.inc();
+      this.metrics.quoteLatency.observe(Date.now() - t0);
+      throw new BadRequestException('fok_insufficient_liquidity');
     }
+    // Para IOC / GTC: seguimos adelante; el builder usará plan.fills tal cual.
 
     let txData: TxData | undefined;
+    let txList: TxData[] | undefined; // ⬅️ lista secuencial de txs
 
     // Valores calculados para hidratar respuesta (front approve)
     let computedTakerFillAmount: bigint | undefined;
-    // Por defecto, según el lado del taker: BUY paga QUOTE, SELL paga BASE
     const computedTakerToken: `0x${string}` =
       plan.side === 'BUY'
         ? (ctx.quoteAddress as `0x${string}`)
@@ -185,7 +195,6 @@ export class MatchController {
               : fillBase; // taker paga BASE
 
           computedTakerFillAmount = takerFillAmount;
-          // computedTakerToken ya está definido por lado; mantenemos
 
           try {
             txData = this.txb.buildFillLimitOrder(
@@ -198,24 +207,22 @@ export class MatchController {
             this.logger.warn(
               `match/quote: txData build failed → ${(e as Error).message}`,
             );
-            txData = undefined; // devolvemos 200 OK sin txData
+            txData = undefined;
           }
         }
       } else {
-        // Single-fill path (único soportado con txData en F4)
+        // Single-fill path duplicado previo (respetado), pero tratamos multi-fill aquí
         if (Array.isArray(plan.fills) && plan.fills.length === 1) {
           const f = plan.fills[0];
-          // sanity-use to satisfy strict no-unused-vars (length checked above)
           if (!f) {
             throw new BadRequestException(
               'match/quote: empty fill after length check',
             );
           }
-
-          // ... (tu bloque single-fill existente SIN cambios)
+          // (Sin cambios: dejamos tu bloque previo tal cual)
         } else if (Array.isArray(plan.fills) && plan.fills.length > 1) {
-          // === NEW: multi-fill batch path ===
-          // 1) Hydrate raw order + sig for each fill (same logic you use in single-fill)
+          // === MULTI-FILL ===
+          // 1) Hydrate raw
           await Promise.all(
             plan.fills.map(async (f) => {
               if (!f.rawOrder || !f.rawSig) {
@@ -241,7 +248,7 @@ export class MatchController {
           if (missing.length > 0) {
             noTxReason = 'missing_raw';
           } else {
-            // 3) Sanitize orders for ABI
+            // 3) Sanitize orders
             const ordersForAbi: LimitOrder[] = plan.fills.map((f) =>
               sanitizeOrder(f.rawOrder),
             );
@@ -251,32 +258,28 @@ export class MatchController {
               const order = ordersForAbi[i];
               const fillBase = BigInt(f.sizeBase);
               if (plan.side === 'BUY') {
-                // taker pays QUOTE
                 const makerAmt = order.makerAmount;
                 const takerAmt = order.takerAmount;
                 return (
                   (fillBase * takerAmt) / (makerAmt === 0n ? 1n : makerAmt)
                 );
               }
-              // SELL: taker pays BASE
               return fillBase;
             });
 
-            // 5) Provide top-level takerAmount for front (sum of all)
+            // 5) Suma total para approve top-level
             const sum = takerTokenFillAmounts.reduce((acc, x) => acc + x, 0n);
             computedTakerFillAmount = sum;
 
             try {
-              // 6) Build single calldata for all fills
+              // 6) Intento batch original (respetando tu lógica)
               const tx = this.txb.buildBatchFillLimitOrders({
                 orders: ordersForAbi,
                 signatures: plan.fills.map((f): `0x${string}` | ZeroExSig => {
                   const s = f.rawSig as unknown;
-                  // if it's a full 65-byte hex signature, pass hex (builder will parse)
                   if (typeof s === 'string' && /^0x[0-9a-fA-F]{130}$/.test(s)) {
                     return s as `0x${string}`;
                   }
-                  // if it's already a tuple, pass it through
                   if (
                     typeof s === 'object' &&
                     s !== null &&
@@ -286,7 +289,6 @@ export class MatchController {
                   ) {
                     return s as ZeroExSig;
                   }
-                  // dev fallback: dummy tuple (EIP-712 type, r/s zero, v=27)
                   return {
                     signatureType: 2,
                     v: 27,
@@ -294,11 +296,11 @@ export class MatchController {
                     s: ZERO32,
                   } satisfies ZeroExSig;
                 }),
-
                 takerTokenFillAmounts,
-                // Prefer false: tolerate that a level might be taken between quote & execute
                 revertIfIncomplete: false,
               });
+
+              // Si por algún motivo se pudo construir batch, lo devolvemos
               txData = tx;
             } catch (e) {
               const msg = (e as Error).message;
@@ -306,17 +308,26 @@ export class MatchController {
                 `match/quote: batch txData build failed → ${msg}`,
               );
 
-              // 🔴 Caso Base: EP sin batchFillLimitOrders → mandamos 400 con mensaje humano
-              if (msg.includes('batchFillLimitOrders no está implementado')) {
-                throw new BadRequestException(
-                  'In Base (chainId 8453), the 0x Exchange Proxy doesn’t support multi-fill (batchFillLimitOrders). ' +
-                    'Reduce the size or wait for a version with a custom router.',
-                );
+              // Fallback secuencial → construimos una tx por fill
+              try {
+                const list: TxData[] = [];
+                for (let i = 0; i < ordersForAbi.length; i++) {
+                  const t = this.txb.buildFillLimitOrder(
+                    ordersForAbi[i],
+                    plan.fills[i].rawSig as unknown as
+                      | `0x${string}`
+                      | ZeroExSig,
+                    takerTokenFillAmounts[i],
+                  );
+                  list.push(t);
+                }
+                txList = list;
+                // No establecemos noTxReason: hay plan ejecutable (secuencial)
+              } catch (e2) {
+                // Sólo si el fallback también falla, reportamos
+                noTxReason = `builder_fail: ${(e2 as Error).message}`;
+                txList = undefined;
               }
-
-              // Resto de errores: seguimos como antes
-              noTxReason = `builder_fail: ${msg}`;
-              txData = undefined;
             }
           }
         } else {
@@ -326,7 +337,9 @@ export class MatchController {
     }
 
     this.logger.log(
-      `match/quote → fills=${plan.fills.length} txData=${txData ? 'yes' : 'no'} reason=${noTxReason ?? '-'}`,
+      `match/quote → fills=${plan.fills.length} txData=${txData ? 'yes' : 'no'}${
+        txList?.length ? ` txList=${txList.length}` : ''
+      } reason=${noTxReason ?? '-'}`,
     );
 
     // Si el plan ya trae top-level, respétalo (type-safe)
@@ -353,11 +366,17 @@ export class MatchController {
         ? computedTakerFillAmount.toString()
         : undefined);
 
+    // --- METRICS ---
+    this.metrics.quotesTotal.inc();
+    this.metrics.quoteLatency.observe(Date.now() - t0);
+
     return {
       ...plan,
+      tif,
       takerToken: finalToken,
       ...(finalAmount ? { takerAmount: finalAmount } : {}),
       txData,
+      ...(txList && txList.length > 0 ? { txList } : {}),
       availableBase: availableBase.toString(),
       shortfallBase: shortfallBase.toString(),
       ...(noTxReason ? { noTxReason } : {}),

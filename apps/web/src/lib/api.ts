@@ -1,6 +1,63 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 // apps/web/src/lib/api.ts
 import { env } from "./env";
+// ⬇️ NUEVO: usamos los tipos “nuevos” para la ruta /match/quote con TIF
+import type {
+  QuoteRequest as MatchQuoteRequest,
+  QuoteResponse as MatchQuoteResponse,
+} from "./types";
+
+export type TxData = { to: `0x${string}`; data: `0x${string}`; value: string };
+
+// --- helper: top-of-book live para postOnly (1 nivel) ---
+export async function fetchTopOfBook(symbol: string): Promise<{
+  bestBid?: { priceTicks: string; sizeBase: string };
+  bestAsk?: { priceTicks: string; sizeBase: string };
+}> {
+  const base = env().NEXT_PUBLIC_API_BASE_URL;
+  const r = await fetch(
+    `${base}/orderbook?symbol=${encodeURIComponent(symbol)}&depth=1&source=live`,
+    { cache: "no-store" },
+  );
+  if (!r.ok) throw new Error(await r.text());
+  const j = (await r.json()) as {
+    l2: {
+      bids: Array<{ priceTicks: string; sizeBase: string }>;
+      asks: Array<{ priceTicks: string; sizeBase: string }>;
+    };
+  };
+  return {
+    bestBid: j?.l2?.bids?.[0],
+    bestAsk: j?.l2?.asks?.[0],
+  };
+}
+
+export async function postBuildCancelPairTx(p: {
+  makerToken: `0x${string}`;
+  takerToken: `0x${string}`;
+  minValidSalt: string | number | bigint;
+}): Promise<{ ok: true; txData: TxData }> {
+  const base = env().NEXT_PUBLIC_API_BASE_URL;
+  const r = await fetch(`${base}/tx/cancelPair`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(p),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function postBuildCancelManyTx(
+  orderHashes: string[],
+): Promise<{ ok: true; txList: TxData[] }> {
+  const base = env().NEXT_PUBLIC_API_BASE_URL;
+  const r = await fetch(`${base}/tx/cancelMany`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ orderHashes }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
 
 /** Build base URL from validated env */
 const baseUrl = (): string => env().NEXT_PUBLIC_API_BASE_URL;
@@ -219,6 +276,7 @@ export async function postBuildCancelTx(body: {
   );
 }
 
+// ⬇️ Tipos “antiguos” de quote (los dejo tal cual para no romper nada existente)
 export type QuoteRequest = { marketId: string; side: "BUY" | "SELL"; sizeBase: string };
 export type QuoteResponse = {
   fills: Array<{
@@ -228,13 +286,35 @@ export type QuoteResponse = {
     raw?: { order: unknown; signature: string };
     takerToken?: `0x${string}`;
     takerAmount?: string;
+    takerFeeAmount?: string;
+    takerTotalAmount?: string;
   }>;
   txData?: { to: `0x${string}`; data: `0x${string}`; value: string };
+  txlist?: Array<{ to: `0x${string}`; data: `0x${string}`; value: string }>;
+  strategy?: "single" | "secuential_fill";
 };
 
 export async function postQuote(body: QuoteRequest): Promise<QuoteResponse> {
   return http<QuoteResponse>(`/match/quote`, { method: "POST", body: JSON.stringify(body) });
 }
+
+// ⬇️ NUEVO: ruta “moderna” para taker con TIF (IOC / FOK) usando tipos de ./types
+export async function postMatchQuote(
+  req: MatchQuoteRequest,
+): Promise<MatchQuoteResponse & { txData?: TxData }> {
+  const base = env().NEXT_PUBLIC_API_BASE_URL;
+  const r = await fetch(`${base}/match/quote`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!r.ok) {
+    // Propaga el texto tal cual para que el front lo ponga en un toast
+    throw new Error(await r.text());
+  }
+  return (await r.json()) as MatchQuoteResponse & { txData?: TxData };
+}
+
 export type OrdersListItem = {
   id: string;
   symbol: string;

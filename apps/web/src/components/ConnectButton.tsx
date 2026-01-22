@@ -1,5 +1,4 @@
 // apps/web/src/components/ConnectButton.tsx
-// apps/web/src/components/ConnectButton.tsx
 "use client";
 
 import React from "react";
@@ -20,12 +19,18 @@ export default function ConnectButton() {
   }
 
   return (
-    <div className="flex gap-2">
-      <button className="px-3 py-1 rounded bg-gray-800 text-white" onClick={connectInjected}>
+    <div className="flex gap-1">
+      <button
+        className="rounded-full px-3 py-1 text-xs font-medium bg-sky-600 text-white hover:bg-sky-500 transition"
+        onClick={connectInjected}
+      >
         MetaMask
       </button>
       {web3authEnabled && (
-        <button className="px-3 py-1 rounded border" onClick={connectWeb3Auth}>
+        <button
+          className="rounded-full px-3 py-1 text-xs font-medium border border-neutral-700 text-neutral-200 hover:bg-neutral-800 transition"
+          onClick={connectWeb3Auth}
+        >
           Web3Auth
         </button>
       )}

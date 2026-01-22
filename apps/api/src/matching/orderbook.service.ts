@@ -6,6 +6,8 @@ import type { LimitOrder, Signature } from '../zeroex/limit-order.types';
 
 export type Side = 'BUY' | 'SELL';
 
+const TAKER_FEE_BPS = Number(process.env.TAKER_FEE_BPS || '0');
+
 type Order = {
   id: string;
   maker: string;
@@ -380,6 +382,7 @@ export class OrderBookService {
     }> = [];
 
     let takerTotalQ = 0n;
+    let takerFeeTotal = 0n;
 
     for (const level of levels) {
       if (remaining <= 0n) break;
@@ -392,6 +395,38 @@ export class OrderBookService {
         (level.priceTicks * ctx.priceTickQ * exec) /
         10n ** BigInt(ctx.baseDecimals);
       takerTotalQ += notionalQ;
+
+      // fee por fill (en takerToken). Si el rawOrder está adjunto, usa su takerTokenFeeAmount prorrateado.
+      // Si no, calcula por política (TAKER_FEE_BPS) sobre el "taker side amount" del fill.
+      let feePart = 0n;
+
+      // helper local seguro
+      const toBig = (v: unknown): bigint => {
+        if (typeof v === 'bigint') return v;
+        if (typeof v === 'number') return BigInt(v);
+        if (typeof v === 'string') return BigInt(v);
+        return 0n;
+      };
+
+      if (
+        level.rawOrder &&
+        typeof level.rawOrder.takerTokenFeeAmount !== 'undefined'
+      ) {
+        try {
+          const makerAmt = toBig(level.rawOrder.makerAmount);
+          const takerFeeFull = toBig(level.rawOrder.takerTokenFeeAmount); // fee del 100% del order
+          // prorratea por exec/makerAmt
+          feePart = makerAmt > 0n ? (takerFeeFull * exec) / makerAmt : 0n;
+        } catch {
+          feePart = 0n;
+        }
+      } else if (TAKER_FEE_BPS > 0) {
+        // si BUY, el "taker side" son unidades de QUOTE (notionalQ)
+        // si SELL, el "taker side" son unidades de BASE (exec)
+        const takerSideAmt = q.side === 'BUY' ? notionalQ : exec;
+        feePart = (takerSideAmt * BigInt(TAKER_FEE_BPS)) / 10000n;
+      }
+      takerFeeTotal += feePart; // <- (asegúrate de sumar fuera de las ramas como en tu retorno)
 
       fills.push({
         makerOrderHash: level.id,
@@ -411,6 +446,8 @@ export class OrderBookService {
       remainingBase: remaining.toString(),
       takerToken: q.side === 'BUY' ? ctx.quoteAddress : ctx.baseAddress,
       takerAmount: takerTotalQ.toString(), // raw quote units if BUY; raw base units if SELL (see above)
+      takerFeeAmount: takerFeeTotal.toString(),
+      takerTotalAmount: (takerTotalQ + takerFeeTotal).toString(),
       fills,
     };
   }

@@ -39,6 +39,7 @@
     "dotenv": "17.2.3",
     "ethers": "6.15.0",
     "nodejs-order-book": "10.0.1",
+    "prom-client": "^15.1.3",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "socket.io": "^4.8.1",

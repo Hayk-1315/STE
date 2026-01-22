@@ -321,7 +321,7 @@ export class PersistenceRepository {
     priceTicks: bigint,
     sizeBase: bigint,
   ) {
-    await this.prisma.trade.create({
+    const row = await this.prisma.trade.create({
       data: {
         marketId,
         makerOrderHash,
@@ -329,6 +329,21 @@ export class PersistenceRepository {
         priceTicks,
         sizeBase: this.D(sizeBase),
       },
+      select: {
+        market: { select: { symbol: true } },
+        // 👈 quitamos createdAt: true porque no está en el modelo tipado
+      },
+    });
+
+    const symbol = row.market.symbol;
+    // payload simple y string-friendly para el front
+    this.ws.emitTrade(symbol, {
+      symbol,
+      makerOrderHash,
+      taker: taker.toLowerCase(),
+      priceTicks: priceTicks.toString(),
+      sizeBase: sizeBase.toString(),
+      ts: new Date().toISOString(), // 👈 usamos "ahora" como timestamp del trade
     });
   }
 

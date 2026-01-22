@@ -104,11 +104,10 @@ model Trade {
 
   makerOrderHash String
   taker          String @db.VarChar(42)
-  // Executed price/size (ticks + base units)
+  
   priceTicks   BigInt
   sizeBase     Decimal @db.Decimal(78,0)
 
-  // On-chain tx hash is optional in F2 (filled later on settlement)
   txHash      String? @db.VarChar(66)
 
   ts          DateTime @default(now())

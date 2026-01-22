@@ -1,9 +1,9 @@
 // apps/api/src/public/health.controller.ts
-import { Controller, Get, Header } from '@nestjs/common';
+import { Controller, Get } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { ZeroExAddressesService } from '../zeroex/addresses.service';
 import { OrderBookService } from '../matching/orderbook.service';
-import { metrics } from '../infra/metrics';
+//import { metrics } from '../infra/metrics';
 import { JsonRpcProvider } from 'ethers';
 
 @Controller()
@@ -19,14 +19,14 @@ export class HealthController {
     if (url) this.provider = new JsonRpcProvider(url);
   }
 
-  @Get('healthz')
+  /*@Get('healthz')
   healthz() {
     return {
       ok: true as const,
       uptimeSec: metrics.snapshot().uptimeSec,
       env: process.env.NODE_ENV ?? 'development',
     };
-  }
+  }*/
 
   @Get('readyz')
   async readyz() {
@@ -73,9 +73,9 @@ export class HealthController {
     return out;
   }
 
-  @Get('metrics')
+  /*@Get('metrics')
   @Header('Content-Type', 'text/plain; version=0.0.4')
   metrics() {
     return metrics.toProm();
-  }
+  }*/
 }

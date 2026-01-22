@@ -13,10 +13,13 @@ import {
   toUtf8Bytes,
 } from 'ethers';
 import { ZeroExTxBuildersService } from '../zeroex/tx-builders.service';
+import { MetricsService } from '../observability/metrics.service';
+import { ShadowChecksService } from '../observability/shadow-checks.service';
 
 type PostOrderDTO = {
   order: LimitOrder;
   signature: Signature;
+  postOnly?: boolean;
 };
 
 type CancelDTO = {
@@ -89,6 +92,11 @@ function hasGetRaw(x: unknown): x is OrderBookWithGetRaw {
     typeof (x as any).getRaw === 'function'
   );
 }
+
+/** ⬇️ NUEVO: política de fees (opcional) leída de ENV */
+const FEE_BPS = Number(process.env.TAKER_FEE_BPS || '0'); // ej. 10 = 0.10%
+const FEE_RECIPIENT = (process.env.TAKER_FEE_RECIPIENT || '').toLowerCase();
+
 @Controller()
 export class OrdersController {
   constructor(
@@ -96,6 +104,8 @@ export class OrdersController {
     private readonly repo: PersistenceRepository,
     private readonly signing: ZeroExSigningService,
     private readonly txBuilders: ZeroExTxBuildersService,
+    private readonly metrics: MetricsService,
+    private readonly shadowChecks: ShadowChecksService,
   ) {}
 
   /**
@@ -152,9 +162,7 @@ export class OrdersController {
       );
 
       if (!valid || !recovered || toLower(recovered) !== makerExpected) {
-        // Minimal diagnostic: compare recovered vs maker, chainId, hash and expiry typing
-        // (Remove after debugging)
-
+        // Minimal diagnostic
         const alt = this.signing.verifySignature(chainId, order, {
           ...sigUnion,
           signatureType: SignatureType.ETHSIGN,
@@ -181,6 +189,23 @@ export class OrdersController {
         throw new BadRequestException('invalid_signature');
       }
     }
+
+    /** ⬇️ NUEVO: Validación mínima de política de taker fee (si está configurada) */
+    if (FEE_BPS > 0 || FEE_RECIPIENT) {
+      const feeRecipient = toLower((order.feeRecipient as string) || '');
+      const takerAmt = BigInt(order.takerAmount ?? '0');
+      const gotFee = BigInt(order.takerTokenFeeAmount ?? '0');
+      const expectedMinFee =
+        FEE_BPS > 0 ? (takerAmt * BigInt(FEE_BPS)) / 10000n : 0n;
+
+      if (FEE_RECIPIENT && feeRecipient !== FEE_RECIPIENT) {
+        throw new BadRequestException('invalid_fee_recipient');
+      }
+      if (FEE_BPS > 0 && gotFee < expectedMinFee) {
+        throw new BadRequestException('taker_fee_too_low_for_policy');
+      }
+    }
+    /** ⬆️ FIN cambios fee */
 
     // 2) Resolve market by token pair (makerToken/takerToken)
     const makerToken = toLower(order.makerToken);
@@ -245,6 +270,41 @@ export class OrdersController {
       }
     }
 
+    // ⬇️ NUEVO: shadow check de balance/allowance del maker (read-only, opcionalmente blocking)
+    const shadow = await this.shadowChecks.checkMakerFunds({
+      makerToken: order.makerToken,
+      makerAmount: order.makerAmount,
+      maker: order.maker,
+    });
+
+    if (!shadow.ok && this.shadowChecks.isBlocking) {
+      throw new BadRequestException(
+        `shadow_check_failed: ${shadow.warnings.join(' | ')}`,
+      );
+    }
+
+    // ...después de calcular side, priceTicks, sizeBase...
+    const postOnly = Boolean(body?.postOnly);
+
+    // top-of-book para cruzar
+    const snap = this.ob.snapshot(market.symbol, 1);
+    const bestBid = snap.bids[0]?.priceTicks
+      ? BigInt(snap.bids[0].priceTicks)
+      : null;
+    const bestAsk = snap.asks[0]?.priceTicks
+      ? BigInt(snap.asks[0].priceTicks)
+      : null;
+
+    // ¿cruza?
+    const wouldCross =
+      side === 'BUY'
+        ? bestAsk !== null && priceTicks >= bestAsk
+        : bestBid !== null && priceTicks <= bestBid;
+
+    if (postOnly && wouldCross) {
+      throw new BadRequestException('post_only_would_cross');
+    }
+
     // 4) Place into in-memory book keyed by symbol; persistence is handled inside OrderBookService
     const res = await this.ob.place({
       marketId: market.symbol,
@@ -269,7 +329,9 @@ export class OrdersController {
         e instanceof Error ? e.message : String(e),
       );
     }
-
+    if (this.metrics && typeof this.metrics.ordersPlaced?.inc === 'function') {
+      this.metrics.ordersPlaced.inc();
+    }
     return { ok: true, orderHash, status: res.status };
   }
 
@@ -318,8 +380,10 @@ export class OrdersController {
       await this.repo.cancelOrder(ctx2.id, orderHash);
       return { orderHash, status: 'cancelled' as const };
     }
+    this.metrics.ordersCancelled.inc({ kind: '´single', result: out.status });
     return out;
   }
+
   @Post('tx/cancel')
   async buildCancelTx(@Body() body: { marketId: string; orderHash: string }) {
     const { marketId, orderHash } = body || ({} as any);
@@ -350,5 +414,82 @@ export class OrdersController {
 
     const txData = this.txBuilders.buildCancelLimitOrder(rawOrder);
     return { ok: true, txData };
+  }
+
+  @Post('tx/cancelPair')
+  buildCancelPairTx(
+    @Body()
+    body: {
+      makerToken: `0x${string}`;
+      takerToken: `0x${string}`;
+      minValidSalt: string | number | bigint;
+    },
+  ) {
+    const { makerToken, takerToken, minValidSalt } = body || ({} as any);
+    const isAddr = (a: unknown) =>
+      typeof a === 'string' && a.startsWith('0x') && a.length === 42;
+
+    if (!isAddr(makerToken) || !isAddr(takerToken)) {
+      throw new BadRequestException(
+        'makerToken and takerToken must be addresses',
+      );
+    }
+    if (
+      minValidSalt === undefined ||
+      minValidSalt === null ||
+      String(minValidSalt).trim() === ''
+    ) {
+      throw new BadRequestException('minValidSalt is required');
+    }
+    // 👇 Normalizamos SIEMPRE a bigint
+    const minValidSaltBigInt =
+      typeof minValidSalt === 'bigint'
+        ? minValidSalt
+        : BigInt(String(minValidSalt));
+
+    const txData = this.txBuilders.buildCancelPairLimitOrders({
+      makerToken,
+      takerToken,
+      minValidSalt: minValidSaltBigInt, //
+    });
+
+    return { ok: true, txData };
+  }
+
+  @Post('tx/cancelMany')
+  async buildCancelManyTxs(@Body() body: { orderHashes: string[] }) {
+    const hashes = Array.isArray(body?.orderHashes) ? body.orderHashes : [];
+    if (hashes.length === 0) {
+      throw new BadRequestException('orderHashes must be a non-empty array');
+    }
+
+    const txList: Array<{
+      to: `0x${string}`;
+      data: `0x${string}`;
+      value: string;
+    }> = [];
+
+    for (const h of hashes) {
+      // intenta obtener el raw (memoria → BD)
+      let raw: LimitOrder | undefined;
+      const inMem = await this.ob.getRaw(h, h).catch(() => null); // acepta id/symbol indistinto
+      if (hasRawOrder(inMem)) {
+        raw = inMem.order;
+      }
+      if (!raw) {
+        const fromDb = await this.repo.findRawOrderByHash(h);
+        raw = fromDb?.zeroExOrder ?? undefined;
+      }
+      if (!raw) {
+        // si falta alguno, devuélvelo como warning y sigue con los demás
+        continue;
+      }
+      txList.push(this.txBuilders.buildCancelLimitOrder(raw));
+    }
+
+    if (txList.length === 0) {
+      throw new BadRequestException('no_raw_orders_found');
+    }
+    return { ok: true, txList };
   }
 }

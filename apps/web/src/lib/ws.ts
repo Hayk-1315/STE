@@ -70,6 +70,50 @@ function normLevels(arr: unknown): OrderbookLevel[] {
   return out;
 }
 
+// ---- trades helpers ----
+export type TradeWsItem = {
+  makerOrderHash: string;
+  taker: string;
+  priceTicks: string;
+  sizeBase: string;
+  ts: string;
+};
+
+function normTradeItem(v: unknown): TradeWsItem | null {
+  if (!v || typeof v !== "object") return null;
+  const r = v as UnknownRecord;
+
+  const makerOrderHash = typeof r["makerOrderHash"] === "string" ? r["makerOrderHash"] : "";
+  const taker = typeof r["taker"] === "string" ? r["taker"] : "";
+  const priceTicks = toStr(r["priceTicks"]);
+  const sizeBase = toStr(r["sizeBase"]);
+
+  // normalizamos ts
+  const rawTs = r["ts"];
+  let ts: string;
+  if (typeof rawTs === "string") {
+    ts = rawTs;
+  } else if (typeof rawTs === "number") {
+    ts = new Date(rawTs).toISOString();
+  } else if (rawTs && typeof rawTs === "object") {
+    const d = rawTs as Date;
+    const iso = typeof d.toISOString === "function" ? d.toISOString() : undefined;
+    ts = iso ?? new Date().toISOString();
+  } else {
+    ts = new Date().toISOString();
+  }
+
+  if (!makerOrderHash || !priceTicks || !sizeBase) return null;
+
+  return {
+    makerOrderHash,
+    taker,
+    priceTicks,
+    sizeBase,
+    ts,
+  };
+}
+
 export function subscribeBook(
   symbol: string,
   onSnapshot: (b: OrderbookResponse) => void,
@@ -98,7 +142,17 @@ export function subscribeBook(
     if (payloadRaw && typeof payloadRaw === "object") {
       const r = payloadRaw as Record<string, unknown>;
       if (typeof r["symbol"] === "string") sym = r["symbol"] as string;
-      if (typeof r["ts"] === "string") ts = r["ts"] as string;
+      // normaliza ts a ISO string (puede venir como string, number o Date)
+      const rawTs = r["ts"];
+      if (typeof rawTs === "string") {
+        ts = rawTs;
+      } else if (typeof rawTs === "number") {
+        ts = new Date(rawTs).toISOString();
+      } else if (rawTs && typeof rawTs === "object") {
+        const d = rawTs as Date;
+        const iso = typeof d.toISOString === "function" ? d.toISOString() : undefined;
+        if (iso) ts = iso;
+      }
 
       if (Array.isArray(r["bids"]) || Array.isArray(r["asks"])) {
         bids = normLevels(r["bids"]);
@@ -119,6 +173,64 @@ export function subscribeBook(
     s.off("book", handler);
     s.off("connect", onReconnect);
     s.emit("book:unsubscribe", payload);
+  };
+}
+
+export function subscribeTrades(
+  symbol: string,
+  handlers: {
+    onInit?: (payload: { symbol: string; items: TradeWsItem[] }) => void;
+    onTrade?: (trade: TradeWsItem) => void;
+  },
+): Unsubscribe {
+  const s = socket();
+  const payload = { symbol };
+
+  const emitSubscribe = () => {
+    s.emit("trades:subscribe", payload);
+    console.debug("[WS] trades:subscribe", payload);
+  };
+
+  if (s.connected) emitSubscribe();
+  else s.once("connect", emitSubscribe);
+
+  const onReconnect = () => emitSubscribe();
+  s.on("connect", onReconnect);
+
+  const handleInit = (msg: unknown) => {
+    if (!handlers.onInit) return;
+    if (!msg || typeof msg !== "object") return;
+
+    const r = msg as UnknownRecord;
+    const sym =
+      typeof r["symbol"] === "string" && r["symbol"].length > 0 ? (r["symbol"] as string) : symbol;
+
+    const rawItems = Array.isArray(r["items"]) ? (r["items"] as unknown[]) : [];
+    const items: TradeWsItem[] = [];
+    for (const it of rawItems) {
+      const t = normTradeItem(it);
+      if (t) items.push(t);
+    }
+
+    handlers.onInit({ symbol: sym, items });
+  };
+
+  const handleTrade = (msg: unknown) => {
+    if (!handlers.onTrade) return;
+    const t = normTradeItem(msg);
+    if (!t) return;
+    handlers.onTrade(t);
+  };
+
+  s.on("trades:init", handleInit);
+  s.on("trades", handleTrade);
+
+  return () => {
+    s.off("trades:init", handleInit);
+    s.off("trades", handleTrade);
+    s.off("connect", onReconnect);
+    s.emit("trades:unsubscribe", payload);
+    console.debug("[WS] trades:unsubscribe", payload);
   };
 }
 
