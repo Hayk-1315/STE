@@ -5,6 +5,7 @@ import "./globals.css";
 import { WalletProvider } from "@/providers/wallet";
 import NotificationsProvider from "@/providers/notifications";
 import AppBackground from "@/components/AppBackground"; // visual wrapper only
+import AppFooter from "@/components/AppFooter";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
@@ -28,6 +29,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             {/* Consistent page gutter + max width */}
             <div className="mx-auto max-w-[1600px] px-3 sm:px-4 lg:px-6 py-6">{children}</div>
           </WalletProvider>
+          <AppFooter />
         </AppBackground>
       </body>
     </html>

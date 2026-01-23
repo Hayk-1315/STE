@@ -1,0 +1,16 @@
+{
+  "ulid": "01KFP01BHYVYMRG0FJHV19X70S",
+  "minTime": 1769180224947,
+  "maxTime": 1769184000000,
+  "stats": {
+    "numSamples": 11438,
+    "numFloatSamples": 11438,
+    "numSeries": 133,
+    "numChunks": 133
+  },
+  "compaction": {
+    "level": 1,
+    "sources": ["01KFP01BHYVYMRG0FJHV19X70S"]
+  },
+  "version": 1
+}

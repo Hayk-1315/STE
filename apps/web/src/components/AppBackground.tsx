@@ -4,7 +4,7 @@ import React from "react";
 
 export default function AppBackground({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-950 to-indigo-950 text-neutral-50 relative overflow-hidden">
+    <div className="min-h-screen bg-linear-to-br from-slate-950 via-slate-950 to-indigo-950 text-neutral-50 relative overflow-hidden">
       {/* Glows de fondo equilibrados */}
       <div className="pointer-events-none absolute inset-0">
         {/* Arriba-izquierda: un poco más grande y un pelín más intenso */}

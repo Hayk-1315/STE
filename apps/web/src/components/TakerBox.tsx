@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // apps/web/src/components/TakerBox.tsx
 "use client";
 
@@ -574,8 +575,8 @@ export default function TakerBox({ market }: Props) {
           className={cn(
             "rounded-md px-3 py-2 text-white disabled:cursor-not-allowed disabled:opacity-50",
             side === "BUY"
-              ? "bg-emerald-600 hover:bg-emerald-500"
-              : "bg-rose-600 hover:bg-rose-500",
+              ? "bg-emerald-500/10 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/20"
+              : "bg-rose-500/10 text-rose-300 border border-rose-500/40 hover:bg-rose-500/20",
           )}
         >
           Execute
@@ -720,15 +721,17 @@ export function PlaceLimitButton({
   const disabled = !valid.ok;
   const intent =
     side === "BUY"
-      ? "bg-emerald-600 hover:bg-emerald-500 text-white shadow-[0_0_18px_rgba(16,185,129,0.35)]"
-      : "bg-rose-600 hover:bg-rose-500 text-white shadow-[0_0_18px_rgba(244,63,94,0.35)]";
+      ? "bg-emerald-500/10 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/20"
+      : "bg-rose-500/10 text-rose-300 border border-rose-500/40 hover:bg-rose-500/20";
 
   return (
     <div className="space-y-1.5">
       <button
         type="button"
         className={`w-full rounded-lg py-2.5 px-3 text-sm font-semibold tracking-wide transition ${
-          disabled ? "bg-neutral-800 text-neutral-500 cursor-not-allowed" : intent
+          disabled
+            ? "bg-neutral-800 text-neutral-500 border border-neutral-700 cursor-not-allowed"
+            : intent
         }`}
         disabled={disabled}
         onClick={async () => {

@@ -35,7 +35,7 @@ import { marketSummary } from "@/lib/marketMath";
 import { ethers } from "ethers";
 import MarketHeader from "@/components/MarketHeader";
 import MakerHints from "@/components/MakerHints";
-import AppFooter from "@/components/AppFooter";
+// import AppFooter from "@/components/AppFooter";
 import Segmented from "@/components/ui/Segmented";
 import AccountBadge from "@/components/AccountBadge";
 //import ApiHealthBadge from "@/components/ApiHealthBadge";
@@ -1065,8 +1065,6 @@ export default function MarketPage() {
           </Card>
         </div>
       </div>
-
-      <AppFooter />
     </div>
   );
 }
