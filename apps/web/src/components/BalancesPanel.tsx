@@ -37,6 +37,15 @@ function fmtAllowanceLabel(raw: bigint, decimals: number): string {
   }).format(n);
 }
 
+function fmtEth(raw: string): string {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return raw;
+  return n.toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 4,
+  });
+}
+
 export default function BalancesPanel({ market }: Props) {
   const { getSigner, address } = useWallet();
   const [loading, setLoading] = React.useState(false);
@@ -282,7 +291,7 @@ export default function BalancesPanel({ market }: Props) {
             <div className="rounded-lg border border-neutral-800/70 bg-neutral-950/40 px-3 py-2 space-y-1">
               <div className="flex items-center justify-between text-xs text-neutral-400">
                 <span>ETH balance</span>
-                <span className="font-mono text-neutral-100">{data.eth}</span>
+                <span className="font-mono text-neutral-100">{fmtEth(data.eth)}</span>
               </div>
             </div>
 
@@ -290,13 +299,13 @@ export default function BalancesPanel({ market }: Props) {
             <div className="rounded-lg border border-neutral-800/70 bg-neutral-950/40 px-3 py-2 space-y-2">
               <div className="flex items-center justify-between text-xs text-neutral-400">
                 <span>{market.base.symbol} balance</span>
-                <span className="font-mono text-neutral-100">{data.base.bal}</span>
+                <span className="font-mono text-neutral-100">{fmtEth(data.base.bal)}</span>
               </div>
 
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <div className="text-[11px] text-neutral-500">Allowance</div>
-                  <div className="font-mono text-xs text-neutral-200">{data.base.alw}</div>
+                  <div className="font-mono text-xs text-neutral-200">{fmtEth(data.base.alw)}</div>
                 </div>
 
                 {data.spender && (
@@ -333,12 +342,12 @@ export default function BalancesPanel({ market }: Props) {
                       size="sm"
                       variant="outline"
                       className="ml-2"
-                      disabled={isZeroDisplay(data.base.alw)}
+                      disabled={isZeroDisplay(fmtEth(data.base.alw))}
                       onClick={() =>
                         doRevoke(market.base.address as `0x${string}`, market.base.symbol)
                       }
                       title={
-                        isZeroDisplay(data.base.alw)
+                        isZeroDisplay(fmtEth(data.base.alw))
                           ? "Allowance ya está en 0"
                           : "Revocar allowance"
                       }
@@ -354,13 +363,13 @@ export default function BalancesPanel({ market }: Props) {
             <div className="rounded-lg border border-neutral-800/70 bg-neutral-950/40 px-3 py-2 space-y-2">
               <div className="flex items-center justify-between text-xs text-neutral-400">
                 <span>{market.quote.symbol} balance</span>
-                <span className="font-mono text-neutral-100">{data.quote.bal}</span>
+                <span className="font-mono text-neutral-100">{fmtEth(data.quote.bal)}</span>
               </div>
 
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <div className="text-[11px] text-neutral-500">Allowance</div>
-                  <div className="font-mono text-xs text-neutral-200">{data.quote.alw}</div>
+                  <div className="font-mono text-xs text-neutral-200">{fmtEth(data.quote.alw)}</div>
                 </div>
 
                 {data.spender && (
@@ -397,12 +406,12 @@ export default function BalancesPanel({ market }: Props) {
                       size="sm"
                       variant="outline"
                       className="ml-2"
-                      disabled={isZeroDisplay(data.quote.alw)}
+                      disabled={isZeroDisplay(fmtEth(data.quote.alw))}
                       onClick={() =>
                         doRevoke(market.quote.address as `0x${string}`, market.quote.symbol)
                       }
                       title={
-                        isZeroDisplay(data.quote.alw)
+                        isZeroDisplay(fmtEth(data.quote.alw))
                           ? "Allowance ya está en 0"
                           : "Revocar allowance"
                       }

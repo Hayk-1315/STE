@@ -15,6 +15,12 @@ const schema = z.object({
     .optional()
     .transform((s) => (s ? new URL(s).toString() : undefined)),
   NEXT_PUBLIC_ZEROEX_EXCHANGE_PROXY: z.string().regex(/^0x[0-9a-fA-F]{40}$/, "Invalid address"),
+  NEXT_PUBLIC_PROFILE: z.string().optional(),
+  NEXT_PUBLIC_TAKER_FEE_BPS: z.string().regex(/^\d+$/).optional(),
+  NEXT_PUBLIC_TAKER_FEE_RECIPIENT: z
+    .string()
+    .regex(/^0x[0-9a-fA-F]{40}$/, "Invalid address")
+    .optional(),
 });
 
 type Env = z.infer<typeof schema>;
@@ -28,6 +34,9 @@ export function env(): Env {
     NEXT_PUBLIC_WEB3AUTH_CLIENT_ID: process.env.NEXT_PUBLIC_WEB3AUTH_CLIENT_ID,
     NEXT_PUBLIC_RPC_URL: process.env.NEXT_PUBLIC_RPC_URL,
     NEXT_PUBLIC_ZEROEX_EXCHANGE_PROXY: process.env.NEXT_PUBLIC_ZEROEX_EXCHANGE_PROXY,
+    NEXT_PUBLIC_PROFILE: process.env.NEXT_PUBLIC_PROFILE,
+    NEXT_PUBLIC_TAKER_FEE_BPS: process.env.NEXT_PUBLIC_TAKER_FEE_BPS,
+    NEXT_PUBLIC_TAKER_FEE_RECIPIENT: process.env.NEXT_PUBLIC_TAKER_FEE_RECIPIENT,
   });
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
@@ -43,6 +52,8 @@ export function rpcUrl(): string {
   // Sensible defaults for Base
   if (e.NEXT_PUBLIC_CHAIN_ID === 8453) return "https://mainnet.base.org";
   if (e.NEXT_PUBLIC_CHAIN_ID === 84532) return "https://sepolia.base.org";
+  if (e.NEXT_PUBLIC_CHAIN_ID === 11155111)
+    return "https: //eth-sepolia.g.alchemy.com/v2/GmO-dgFRQXQ0TDACdPdaVZ_DCotBW-6e";
   // Fallback local
   return "http://localhost:8545";
 }

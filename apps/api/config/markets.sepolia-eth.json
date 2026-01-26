@@ -1,0 +1,24 @@
+{
+  "chain": "ethereum-sepolia",
+  "markets": [
+    {
+      "symbol": "WETH-USDC",
+      "baseToken": {
+        "address": "0xFfF9976782d46CC05630D1f6eBAb18b2324d6B14",
+        "symbol": "WETH",
+        "decimals": 18
+      },
+      "quoteToken": {
+        "address": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+        "symbol": "USDC",
+        "decimals": 6
+      },
+      "tradingRules": {
+        "minNotional": "1",
+        "minSize": "0.0001",
+        "priceTick": "0.01"
+      }
+    }
+  ],
+  "routing": { "dynamicRouteEnabled": true }
+}

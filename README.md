@@ -78,6 +78,11 @@ You’ll keep **two deploys** (simpler and safer than hot-switching):
 
 > In the UI, clearly label the mode (“Read-only on Base Mainnet”).
 
+### FEES policy
+
+- Demo fee (Sepolia Ethereum): 0.10% → 0xe02c543d4e8c89ab1f76b414fc3c75adc44cec2a (dev only)
+- Base Mainnet demo: 0% (read-only, no execution)
+
 ---
 
 ## Configuration

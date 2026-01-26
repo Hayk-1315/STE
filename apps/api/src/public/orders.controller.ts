@@ -1,5 +1,11 @@
 // apps/api/src/public/orders.controller.ts
-import { BadRequestException, Body, Controller, Post } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  ForbiddenException,
+  Post,
+} from '@nestjs/common';
 import { OrderBookService, Side } from '../matching/orderbook.service';
 import { PersistenceRepository } from '../matching/persistence.repository';
 import { ZeroExSigningService } from '../zeroex/signing.service';
@@ -116,6 +122,9 @@ export class OrdersController {
    */
   @Post('orders')
   async place(@Body() body: PostOrderDTO) {
+    if (process.env.READ_ONLY === 'true') {
+      throw new ForbiddenException('read-only');
+    }
     const { order, signature } = body;
     if (typeof order.expiry === 'string')
       (order as unknown as { expiry: number }).expiry = Number(order.expiry);
@@ -342,6 +351,9 @@ export class OrdersController {
    */
   @Post('cancel')
   async cancel(@Body() body: CancelDTO) {
+    if (process.env.READ_ONLY === 'true') {
+      throw new ForbiddenException('read-only');
+    }
     const { marketId, orderHash, maker, signature } = body;
 
     if (!marketId || !orderHash || !maker || !signature) {
@@ -386,6 +398,9 @@ export class OrdersController {
 
   @Post('tx/cancel')
   async buildCancelTx(@Body() body: { marketId: string; orderHash: string }) {
+    if (process.env.READ_ONLY === 'true') {
+      throw new ForbiddenException('read-only');
+    }
     const { marketId, orderHash } = body || ({} as any);
     if (!marketId || !orderHash) {
       throw new BadRequestException('marketId and orderHash are required');
@@ -425,6 +440,9 @@ export class OrdersController {
       minValidSalt: string | number | bigint;
     },
   ) {
+    if (process.env.READ_ONLY === 'true') {
+      throw new ForbiddenException('read-only');
+    }
     const { makerToken, takerToken, minValidSalt } = body || ({} as any);
     const isAddr = (a: unknown) =>
       typeof a === 'string' && a.startsWith('0x') && a.length === 42;
@@ -458,6 +476,9 @@ export class OrdersController {
 
   @Post('tx/cancelMany')
   async buildCancelManyTxs(@Body() body: { orderHashes: string[] }) {
+    if (process.env.READ_ONLY === 'true') {
+      throw new ForbiddenException('read-only');
+    }
     const hashes = Array.isArray(body?.orderHashes) ? body.orderHashes : [];
     if (hashes.length === 0) {
       throw new BadRequestException('orderHashes must be a non-empty array');

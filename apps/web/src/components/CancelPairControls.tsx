@@ -1,7 +1,7 @@
 // apps/web/src/components/CancelPairControls.tsx
 "use client";
 
-import React from "react";
+import React, { useMemo } from "react";
 import type { Market } from "@/lib/api";
 import { useWallet } from "@/providers/wallet";
 import { toast } from "sonner";
@@ -19,6 +19,12 @@ export function CancelPairControls({
   const { getSigner, address } = useWallet(); // ← añadido: address para el pre-chequeo
   const [busy, setBusy] = React.useState(false);
   const [scope, setScope] = React.useState<"all" | "older-now" | "older-5m">("older-now");
+
+  const readOnly = useMemo(
+    () =>
+      process.env.NEXT_PUBLIC_READ_ONLY === "true" || process.env.NEXT_PUBLIC_PROFILE === "mainnet",
+    [],
+  );
 
   if (!market) return null;
 
@@ -133,8 +139,14 @@ export function CancelPairControls({
         <option value="all">Cancel ALL for pair</option>
       </select>
       <button
-        onClick={runCancelPair}
         disabled={busy}
+        onClick={() => {
+          if (readOnly) {
+            toast.message("Read-only mode");
+            return;
+          }
+          void runCancelPair();
+        }}
         className="rounded-md border border-rose-500/60 bg-rose-500/10 px-3 py-1.5 text-xs text-rose-100 hover:bg-rose-500/20 disabled:opacity-50"
       >
         {busy ? "…" : `Cancel ${market.symbol}`}

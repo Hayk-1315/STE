@@ -15,7 +15,11 @@ const OFFICIAL: Record<number, { ep: `0x${string}`; spender: `0x${string}` }> =
       ep: '0xdef1c0ded9bec7f1a1670819833240f027b25eff',
       spender: '0xdef1c0ded9bec7f1a1670819833240f027b25eff',
     },
-    // añade otras chains si te interesan
+    // Sepolia Ethereum
+    11155111: {
+      ep: '0xdef1c0ded9bec7f1a1670819833240f027b25eff',
+      spender: '0xdef1c0ded9bec7f1a1670819833240f027b25eff',
+    }, // añade otras chains si te interesan
   };
 
 @Injectable()

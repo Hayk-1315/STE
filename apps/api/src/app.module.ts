@@ -13,8 +13,14 @@ import { MetricsModule } from './observability/metrics.module';
 import { ZeroexHealthService } from './observability/zeroex-health.service';
 import { ShadowChecksService } from './observability/shadow-checks.service';
 import { LobRehydratorService } from './matching/lob-rehydrator.service';
+import { ConfigModule } from '@nestjs/config';
+
 @Module({
   imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      ignoreEnvFile: true, // <-- CLAVE para no leer .env de la raíz
+    }),
     ScheduleModule.forRoot(),
     MatchingModule, // global LOB + repos
     ZeroExModule, // 0x signing + addresses

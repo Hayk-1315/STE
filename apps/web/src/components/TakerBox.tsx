@@ -2,7 +2,7 @@
 // apps/web/src/components/TakerBox.tsx
 "use client";
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { ethers } from "ethers";
 import type { Market } from "@/lib/api";
 import { postMatchQuote } from "@/lib/api";
@@ -16,6 +16,7 @@ import { approveIfNeeded, erc20Allowance } from "@/lib/erc20";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
 import type { QuoteResponse as MatchQuoteResponse, Tif } from "@/lib/types";
+import { getFeeInfo } from "@/lib/fees";
 
 type Props = { market: Market | null };
 
@@ -134,6 +135,12 @@ export default function TakerBox({ market }: Props) {
     window.addEventListener("ste:set-taker", handler as EventListener);
     return () => window.removeEventListener("ste:set-taker", handler as EventListener);
   }, []);
+
+  const readOnly = useMemo(
+    () =>
+      process.env.NEXT_PUBLIC_READ_ONLY === "true" || process.env.NEXT_PUBLIC_PROFILE === "mainnet",
+    [],
+  );
 
   // -------- Paso 1: QUOTE --------
   async function onQuote() {
@@ -555,7 +562,13 @@ export default function TakerBox({ market }: Props) {
       <div className="grid grid-cols-3 gap-2 text-sm">
         <button
           disabled={!market || busy}
-          onClick={onQuote}
+          onClick={() => {
+            if (readOnly) {
+              toast.message("Read-only mode");
+              return;
+            }
+            void onQuote();
+          }}
           className="rounded-md border border-neutral-700 bg-neutral-900/70 px-3 py-2 text-neutral-100 hover:bg-neutral-800/80 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy ? "…" : "Quote"}
@@ -644,7 +657,13 @@ export default function TakerBox({ market }: Props) {
 
       <button
         disabled={busy}
-        onClick={onCheckGas}
+        onClick={() => {
+          if (readOnly) {
+            toast.message("Read-only mode");
+            return;
+          }
+          void onCheckGas();
+        }}
         className="w-full rounded-md border border-neutral-700 bg-neutral-900/70 px-3 py-2 text-xs text-neutral-200 hover:bg-neutral-800/80 disabled:cursor-not-allowed disabled:opacity-50"
       >
         Check Gas / Balance
@@ -681,12 +700,16 @@ export default function TakerBox({ market }: Props) {
           )}
         </div>
       )}
-      <p className="pt-2 mt-1 border-t border-neutral-800/70 text-[12px] leading-snug text-neutral-500">
-        Reminder: market takers pay a 1% fee encoded as{" "}
-        <span className="font-mono">takerTokenFeeAmount</span>. The fee is charged in the taker
-        token and sent to the configured fee recipient. If your trade doesn&apos;t meet the
-        platform&apos;s fee policy, execution will be rejected.
-      </p>
+      {(() => {
+        const { bps, pct, recipientShort } = getFeeInfo();
+        return (
+          <p className="text-xs text-neutral-500">
+            {bps > 0
+              ? `Reminder: market takers pay a ${pct}% fee encoded as takerTokenFeeAmount. The fee is charged in the taker token and sent to ${recipientShort}. If your trade doesn't meet the platform's fee policy, execution will be rejected.`
+              : `Reminder: in this demo the taker fee is 0%.`}
+          </p>
+        );
+      })()}
     </div>
   );
 }
@@ -761,12 +784,17 @@ export function PlaceLimitButton({
           <span>Post only (don&apos;t cross)</span>
         </label>
       </div>
-      <p className="text-[11px] leading-snug text-neutral-500">
-        Reminder: takers pay a fee (1%) encoded in your order (
-        <span className="font-mono">takerTokenFeeAmount</span>). The fee is charged in the taker
-        token and sent to the configured fee recipient. If your order doesn’t meet the platform’s
-        fee policy, it will be rejected.
-      </p>
+      {/* Small print (dynamic) */}
+      {(() => {
+        const { bps, pct, recipientShort } = getFeeInfo();
+        return (
+          <p className="text-xs text-neutral-500">
+            {bps > 0
+              ? `Reminder: takers pay a ${pct}% fee (takerTokenFeeAmount), charged in the taker token and sent to ${recipientShort}. If your order doesn’t meet the fee policy, it will be rejected.`
+              : `Reminder: in this demo the taker fee is 0%.`}
+          </p>
+        );
+      })()}
     </div>
   );
 }

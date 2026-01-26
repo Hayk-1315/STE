@@ -46,6 +46,7 @@ import { getZeroExDomainFallback } from "@/lib/zeroex";
 import { env } from "@/lib/env";
 import MarketSwitcher from "@/components/MarketSwitcher";
 import { CancelPairControls } from "@/components/CancelPairControls";
+import { getFeeInfo } from "@/lib/fees";
 // import DemoModeBanner from "@/components/DemoModeBanner";
 
 type TradeItem = { priceTicks: string; sizeBase: string; ts: string };
@@ -321,6 +322,12 @@ export default function MarketPage() {
 
   const title = useMemo(() => (market ? `${market.symbol}` : symbol), [market, symbol]);
 
+  const readOnly = useMemo(
+    () =>
+      process.env.NEXT_PUBLIC_READ_ONLY === "true" || process.env.NEXT_PUBLIC_PROFILE === "mainnet",
+    [],
+  );
+
   // place handler (UI-only messages updated to English)
   // place handler (UI-only messages updated to English)
   async function onPlace(opts?: { postOnly?: boolean }) {
@@ -594,6 +601,17 @@ export default function MarketPage() {
                 {makerSide === "BUY" ? "Bid" : "Ask"}
               </span>
             </CardTitle>
+            {/* Fee banner (concise line) */}
+            {(() => {
+              const { profile, bps, pct, recipientShort } = getFeeInfo();
+              return (
+                <p className="text-[11px] text-neutral-500">
+                  {bps > 0 && profile === "sepolia"
+                    ? `Demo fee ${pct}% to STE demo (${recipientShort})`
+                    : `Demo: 0% taker fee`}
+                </p>
+              );
+            })()}
           </CardHeader>
 
           <CardContent className="space-y-3 text-sm text-neutral-200">
@@ -754,9 +772,14 @@ export default function MarketPage() {
               side={makerSide}
               sizeHuman={makerSize}
               priceHuman={makerPrice}
-              onPlace={onPlace}
+              onPlace={async () => {
+                if (readOnly) {
+                  toast.message("Read-only mode on Base: trading disabled");
+                  return;
+                }
+                await onPlace();
+              }}
             />
-
             {market && makerValidation && (
               <MakerHints market={market} makerValidation={makerValidation} tickHuman={tickHuman} />
             )}
@@ -793,6 +816,17 @@ export default function MarketPage() {
         <Card className="md:col-span-12 lg:col-span-6 h-full">
           <CardHeader>
             <CardTitle>Taker</CardTitle>
+            {/* Small print (dynamic) */}
+            {(() => {
+              const { profile, bps, pct, recipientShort } = getFeeInfo();
+              return (
+                <p className="text-[11px] text-neutral-500">
+                  {bps > 0 && profile === "sepolia"
+                    ? `Demo fee ${pct}% to STE demo (${recipientShort})`
+                    : `Demo: 0% taker fee`}
+                </p>
+              );
+            })()}
           </CardHeader>
           <CardContent className="h-full">
             <TakerBox market={market} />
@@ -1053,8 +1087,14 @@ export default function MarketPage() {
                 />
 
                 <Button
-                  disabled={!cancelHash || loading}
-                  onClick={onCancel}
+                  disabled={readOnly || !cancelHash || loading}
+                  onClick={() => {
+                    if (readOnly) {
+                      toast.message("Read-only mode");
+                      return;
+                    }
+                    void onCancel();
+                  }}
                   className="w-full justify-center border-red-500/60 text-red-100 hover:bg-red-500/10 disabled:opacity-50 disabled:cursor-not-allowed"
                   variant="outline"
                 >

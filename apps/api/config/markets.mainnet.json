@@ -1,0 +1,62 @@
+{
+  "chain": "base-mainnet",
+  "markets": [
+    {
+      "symbol": "WETH-USDC",
+      "baseToken": {
+        "address": "0x4200000000000000000000000000000000000006",
+        "symbol": "WETH",
+        "decimals": 18
+      },
+      "quoteToken": {
+        "address": "0x833589fCD6EDb6E08f4c7C32D4f71b54bdA02913",
+        "symbol": "USDC",
+        "decimals": 6
+      },
+      "tradingRules": {
+        "minNotional": "10",
+        "minSize": "0.001",
+        "priceTick": "0.01"
+      }
+    },
+    {
+      "symbol": "WETH-USDbC",
+      "baseToken": {
+        "address": "0x4200000000000000000000000000000000000006",
+        "symbol": "WETH",
+        "decimals": 18
+      },
+      "quoteToken": {
+        "address": "0xd9aAEc86B65D86f6A7B5B1b0c42FfA531710b6CA",
+        "symbol": "USDbC",
+        "decimals": 6
+      },
+      "tradingRules": {
+        "minNotional": "10",
+        "minSize": "0.001",
+        "priceTick": "0.01"
+      }
+    },
+    {
+      "symbol": "USDC-USDbC",
+      "baseToken": {
+        "address": "0x833589fCD6EDb6E08f4c7C32D4f71b54bdA02913",
+        "symbol": "USDC",
+        "decimals": 6
+      },
+      "quoteToken": {
+        "address": "0xd9aAEc86B65D86f6A7B5B1b0c42FfA531710b6CA",
+        "symbol": "USDbC",
+        "decimals": 6
+      },
+      "tradingRules": {
+        "minNotional": "10",
+        "minSize": "0.001",
+        "priceTick": "0.01"
+      }
+    }
+  ],
+  "routing": {
+    "dynamicRouteEnabled": true
+  }
+}
