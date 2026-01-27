@@ -52,7 +52,6 @@
     "@web3auth/modal": "8.12.4",
     "@web3auth/openlogin-adapter": "8.12.4",
     "ethers": "6.15.0",
-    "ts-node": "^10.9.2",
-    "next": "16.0.1"
+    "ts-node": "^10.9.2"
   }
 }
