@@ -46,4 +46,4 @@
 - 2026-01-04: Taker UX: show backend insufficient_liquidity on Quote; disable Execute when txData is absent.
 - 2026-01-04: Allowance UX: add Revoke, “Enable Max” uses MaxUint256, display “Unlimited”, remove flicker via block-based silent refresh.
 - 2026-01-04: Backend: explicitly reject multi-fill on Base with a clear error message; stick to single-fill.
-- 2026-01-04: DI fix: register ZEROEX_CONFIG / ZeroExAddressesService in module to resolve FillWatcher dependencies.
+- 2026-01-04: DI fix: register ZEROEX_CONFIG / ZeroExAddressesService in module to resolve FillWatcher dependencies..
