@@ -53,4 +53,5 @@
 - WebSocket feed broadcasts per-symbol snapshots; clients must resubscribe on symbol change and normalize casing.
 - Frontend must not simulate fills if the watcher is enabled; persistence is the source of truth.
 - “Unlimited” allowance is any value > 2^255; show that label instead of a compact number.
-- Spender resolution: prefer /dev/zeroex/sanity.allowanceSpender, fallback to EP address..
+- Spender resolution: prefer /dev/zeroex/sanity.allowanceSpender, fallback to EP address...
+

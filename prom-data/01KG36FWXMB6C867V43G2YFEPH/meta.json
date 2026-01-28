@@ -1,0 +1,18 @@
+{
+	"ulid": "01KG36FWXMB6C867V43G2YFEPH",
+	"minTime": 1769623201321,
+	"maxTime": 1769630400000,
+	"stats": {
+		"numSamples": 16995,
+		"numFloatSamples": 16995,
+		"numSeries": 5,
+		"numChunks": 142
+	},
+	"compaction": {
+		"level": 1,
+		"sources": [
+			"01KG36FWXMB6C867V43G2YFEPH"
+		]
+	},
+	"version": 1
+}
