@@ -1,0 +1,18 @@
+{
+	"ulid": "01KG2SJTDA369VJHEM9AVTCMSE",
+	"minTime": 1769558400333,
+	"maxTime": 1769565600000,
+	"stats": {
+		"numSamples": 5925,
+		"numFloatSamples": 5925,
+		"numSeries": 5,
+		"numChunks": 55
+	},
+	"compaction": {
+		"level": 1,
+		"sources": [
+			"01KG2SJTDA369VJHEM9AVTCMSE"
+		]
+	},
+	"version": 1
+}
