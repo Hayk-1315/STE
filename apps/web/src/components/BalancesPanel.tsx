@@ -13,6 +13,7 @@ import { approveIfNeeded } from "@/lib/erc20";
 import { getZeroExDomainFallback } from "@/lib/zeroex";
 import { env } from "@/lib/env"; // ⬅️ añadido
 import { revokeAllowance } from "@/lib/erc20";
+import { useMemo } from "react";
 
 type Props = { market: Market | null };
 
@@ -60,6 +61,12 @@ export default function BalancesPanel({ market }: Props) {
   function isZeroDisplay(s: string): boolean {
     return /^0(?:\.0+)?$/.test(s.trim());
   }
+
+  const readOnly = useMemo(
+    () =>
+      process.env.NEXT_PUBLIC_READ_ONLY === "true" || process.env.NEXT_PUBLIC_PROFILE === "mainnet",
+    [],
+  );
 
   async function doRevoke(token: `0x${string}`, label: string) {
     try {
@@ -313,13 +320,18 @@ export default function BalancesPanel({ market }: Props) {
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() =>
-                        doApprove(
+                      onClick={() => {
+                        if (readOnly) {
+                          toast.message("Read-only mode");
+                          return;
+                        }
+
+                        return doApprove(
                           market.base.address as `0x${string}`,
                           market.base.decimals,
                           market.base.symbol,
-                        )
-                      }
+                        );
+                      }}
                     >
                       Enable Max
                     </Button>
@@ -327,13 +339,17 @@ export default function BalancesPanel({ market }: Props) {
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() =>
-                        doApproveCustom(
+                      onClick={() => {
+                        if (readOnly) {
+                          toast.message("Read-only mode");
+                          return;
+                        }
+                        return doApproveCustom(
                           market.base.address as `0x${string}`,
                           market.base.decimals,
                           market.base.symbol,
-                        )
-                      }
+                        );
+                      }}
                     >
                       Custom
                     </Button>
@@ -377,13 +393,17 @@ export default function BalancesPanel({ market }: Props) {
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() =>
+                      onClick={() => {
+                        if (readOnly) {
+                          toast.message("Read-only mode");
+                          return;
+                        }
                         doApprove(
                           market.quote.address as `0x${string}`,
                           market.quote.decimals,
                           market.quote.symbol,
-                        )
-                      }
+                        );
+                      }}
                     >
                       Enable Max
                     </Button>
@@ -391,13 +411,17 @@ export default function BalancesPanel({ market }: Props) {
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() =>
+                      onClick={() => {
+                        if (readOnly) {
+                          toast.message("Read-only mode");
+                          return;
+                        }
                         doApproveCustom(
                           market.quote.address as `0x${string}`,
                           market.quote.decimals,
                           market.quote.symbol,
-                        )
-                      }
+                        );
+                      }}
                     >
                       Custom
                     </Button>
