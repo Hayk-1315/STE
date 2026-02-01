@@ -7,6 +7,7 @@ import { useWallet } from "@/providers/wallet";
 import { getOrders, type OrdersListItem } from "@/lib/api";
 import { SkeletonList } from "./Skeleton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/cn";
 
 type Evt =
   | OrderEvent
@@ -122,7 +123,14 @@ export default function OrdersPanel() {
 
   if (!address) {
     return (
-      <div className="rounded-2xl p-4 border bg-neutral-950 border-neutral-800/80 backdrop-blur text-sm text-neutral-300">
+      <div
+        className={cn(
+          "rounded-2xl p-4 border text-sm text-neutral-300",
+          "border-neutral-800/80 bg-neutral-900/85",
+          "backdrop-blur supports-[backdrop-filter]:bg-neutral-900/70",
+          "shadow-sm",
+        )}
+      >
         Connect wallet to see your order events.
       </div>
     );

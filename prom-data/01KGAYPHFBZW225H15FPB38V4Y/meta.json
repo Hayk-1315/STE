@@ -1,0 +1,18 @@
+{
+	"ulid": "01KGAYPHFBZW225H15FPB38V4Y",
+	"minTime": 1769883453652,
+	"maxTime": 1769889600000,
+	"stats": {
+		"numSamples": 399,
+		"numFloatSamples": 399,
+		"numSeries": 133,
+		"numChunks": 133
+	},
+	"compaction": {
+		"level": 1,
+		"sources": [
+			"01KGAYPHFBZW225H15FPB38V4Y"
+		]
+	},
+	"version": 1
+}

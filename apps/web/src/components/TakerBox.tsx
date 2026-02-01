@@ -6,7 +6,7 @@ import React, { useMemo, useState } from "react";
 import { ethers } from "ethers";
 import type { Market } from "@/lib/api";
 import { postMatchQuote } from "@/lib/api";
-import { env } from "@/lib/env";
+import { env, zeroExEP } from "@/lib/env";
 import { useWallet } from "@/providers/wallet";
 import { toast } from "sonner";
 import { validateLimitInput } from "@/lib/validation";
@@ -35,18 +35,19 @@ type MatchQuoteWithTx = MatchQuoteResponse & {
 async function getZeroExDomainFallback() {
   const base = env().NEXT_PUBLIC_API_BASE_URL;
   try {
-    const r = await fetch(`${base}/dev/zeroex/sanity`, { cache: "no-store" });
+    const r = await fetch(`${base}/readyz`, { cache: "no-store" });
     if (r.ok) {
-      const j = (await r.json()) as { exchangeProxy?: string; chainId?: number };
-      if (j.exchangeProxy && j.chainId) {
-        return { chainId: j.chainId, verifyingContract: j.exchangeProxy as `0x${string}` };
-      }
+      const j = (await r.json()) as { exchangeProxy?: string } | null;
+      return {
+        chainId: env().NEXT_PUBLIC_CHAIN_ID,
+        verifyingContract: (j?.exchangeProxy as `0x${string}`) ?? zeroExEP(),
+      };
     }
   } catch {}
   return {
     chainId: env().NEXT_PUBLIC_CHAIN_ID,
-    verifyingContract: "0x0000000000000000000000000000000000000001" as const,
-  };
+    verifyingContract: zeroExEP(),
+  } as const;
 }
 
 // —— helpers de error legible ——

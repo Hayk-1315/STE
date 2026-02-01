@@ -8,9 +8,9 @@ export function Card(props: React.HTMLAttributes<HTMLDivElement>) {
     <div
       {...props}
       className={cn(
-        // Softer card on dark background + subtle blur; works fine on light too
-        "rounded-2xl p-4 border border-neutral-800/60 bg-neutral-900/40",
-        "backdrop-blur supports-[backdrop-filter]:bg-neutral-900/30",
+        // Card más oscuro por defecto, manteniendo el mismo estilo general
+        "rounded-2xl p-4 border border-neutral-800/80 bg-neutral-900/85",
+        "backdrop-blur supports-[backdrop-filter]:bg-neutral-900/70",
         "shadow-sm",
         props.className,
       )}

@@ -16,8 +16,9 @@ export default function DemoModeBanner() {
     (async () => {
       try {
         const base = env().NEXT_PUBLIC_API_BASE_URL;
-        const r = await fetch(`${base}/dev/zeroex/sanity`, { cache: "no-store" });
-        const s: Sanity | null = r.ok ? await r.json() : null;
+        const r = await fetch(`${base}/readyz`, { cache: "no-store" });
+        const s: { exchangeProxy?: string } | null = r.ok ? await r.json() : null;
+        //const s: Sanity | null = r.ok ? await r.json() : null;
         const ep = (s?.exchangeProxy ?? "") as string;
 
         if (!ep || !ep.startsWith("0x") || ep.length !== 42) {

@@ -90,21 +90,19 @@ async function getZeroExDomain(): Promise<ZeroExDomain> {
   const base = env().NEXT_PUBLIC_API_BASE_URL;
 
   try {
-    const r = (await fetch(`${base}/dev/zeroex/sanity`).then((x) => x.json())) as {
-      exchangeProxy?: string;
-      chainId?: number;
-    } | null;
-
-    if (r?.exchangeProxy && r?.chainId) {
+    const r = await fetch(`${base}/readyz`, { cache: "no-store" });
+    if (r.ok) {
+      const j = (await r.json()) as { exchangeProxy?: string } | null;
+      const ep = (j?.exchangeProxy as `0x${string}`) ?? zeroExEP();
       return {
         name: "ZeroEx",
         version: "1.0.0",
-        chainId: Number(r.chainId),
-        verifyingContract: r.exchangeProxy as `0x${string}`,
+        chainId: env().NEXT_PUBLIC_CHAIN_ID,
+        verifyingContract: ep,
       };
     }
   } catch {
-    // ignore → fallback below
+    /* ignore → fallback below */
   }
 
   return {

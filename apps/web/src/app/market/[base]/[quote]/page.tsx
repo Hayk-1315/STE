@@ -125,7 +125,7 @@ export default function MarketPage() {
     let spender = verifyingContract as `0x${string}`;
     try {
       const base = env().NEXT_PUBLIC_API_BASE_URL;
-      const r = (await fetch(`${base}/dev/zeroex/sanity`).then((x) => x.json())) as {
+      const r = (await fetch(`${base}/readyz`).then((x) => x.json())) as {
         allowanceSpender?: string;
       } | null;
       const s = r?.allowanceSpender;
@@ -558,7 +558,7 @@ export default function MarketPage() {
       </div>
 
       {/* Status / manual refresh */}
-      <div className="flex items-center justify-between text-xs text-neutral-400">
+      {/* <div className="flex items-center justify-between text-xs text-neutral-400">
         <div>Last updated: {lastUpdated || "—"}</div>
         <button
           type="button"
@@ -570,7 +570,7 @@ export default function MarketPage() {
         >
           {refreshing ? "Refreshing…" : "Refresh"}
         </button>
-      </div>
+      </div>*/}
 
       {err && (
         <div className="rounded bg-rose-500/10 text-rose-300 border border-rose-500/20 p-2 text-sm">

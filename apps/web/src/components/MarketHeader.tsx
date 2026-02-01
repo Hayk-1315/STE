@@ -10,8 +10,14 @@ import { getZeroExDomainFallback } from "@/lib/zeroex";
 import { addrUrl } from "@/lib/explorer";
 import { Copy, ArrowUpRight } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { cn } from "@/lib/cn";
 
-export default function MarketHeader({ market }: { market: Market | null }) {
+type MarketHeaderProps = {
+  market: Market | null;
+  className?: string;
+};
+
+export default function MarketHeader({ market, className }: MarketHeaderProps) {
   const [ep, setEp] = React.useState<`0x${string}` | null>(null);
 
   React.useEffect(() => {
@@ -35,10 +41,11 @@ export default function MarketHeader({ market }: { market: Market | null }) {
     await navigator.clipboard.writeText(text);
     toast.success(`${label} copied`);
   };
+
   const short = (a: `0x${string}`) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 
   return (
-    <Card className="inline-block">
+    <Card className={cn("inline-block", className)}>
       <CardContent className="p-3">
         {/* fila compacta, sin título de símbolo */}
         <div className="flex flex-wrap items-center gap-2 text-xs leading-tight">
