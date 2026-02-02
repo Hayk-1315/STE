@@ -127,7 +127,7 @@ export default function OrdersPanel() {
         className={cn(
           "rounded-2xl p-4 border text-sm text-neutral-300",
           "border-neutral-800/80 bg-neutral-900/85",
-          "backdrop-blur supports-[backdrop-filter]:bg-neutral-900/70",
+          "backdrop-blur supports-backdrop-filter:bg-neutral-900/70",
           "shadow-sm",
         )}
       >

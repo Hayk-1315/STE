@@ -20,7 +20,7 @@ export default function Segmented<T extends string>({
     <div
       role="radiogroup"
       className={cn(
-        "inline-flex rounded-full border border-neutral-800/60 bg-neutral-900/60 backdrop-blur supports-[backdrop-filter]:bg-neutral-900/40",
+        "inline-flex rounded-full border border-neutral-800/60 bg-neutral-900/60 backdrop-blur supports-backdrop-filter:bg-neutral-900/40",
         className,
       )}
     >

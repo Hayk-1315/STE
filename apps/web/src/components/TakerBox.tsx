@@ -6,7 +6,7 @@ import React, { useMemo, useState } from "react";
 import { ethers } from "ethers";
 import type { Market } from "@/lib/api";
 import { postMatchQuote } from "@/lib/api";
-import { env, zeroExEP } from "@/lib/env";
+//import { env, zeroExEP } from "@/lib/env";
 import { useWallet } from "@/providers/wallet";
 import { toast } from "sonner";
 import { validateLimitInput } from "@/lib/validation";
@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
 import type { QuoteResponse as MatchQuoteResponse, Tif } from "@/lib/types";
 import { getFeeInfo } from "@/lib/fees";
+import { getZeroExDomainFallback } from "@/lib/zeroex";
 
 type Props = { market: Market | null };
 
@@ -31,24 +32,6 @@ type MatchQuoteWithTx = MatchQuoteResponse & {
   takerFeeRecipient?: string;
   feeRecipient?: string;
 };
-
-async function getZeroExDomainFallback() {
-  const base = env().NEXT_PUBLIC_API_BASE_URL;
-  try {
-    const r = await fetch(`${base}/readyz`, { cache: "no-store" });
-    if (r.ok) {
-      const j = (await r.json()) as { exchangeProxy?: string } | null;
-      return {
-        chainId: env().NEXT_PUBLIC_CHAIN_ID,
-        verifyingContract: (j?.exchangeProxy as `0x${string}`) ?? zeroExEP(),
-      };
-    }
-  } catch {}
-  return {
-    chainId: env().NEXT_PUBLIC_CHAIN_ID,
-    verifyingContract: zeroExEP(),
-  } as const;
-}
 
 // —— helpers de error legible ——
 function messageFromUnknown(e: unknown): string {

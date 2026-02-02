@@ -5,7 +5,7 @@ import React from "react";
 import { JsonRpcProvider } from "ethers";
 import { env, rpcUrl } from "@/lib/env";
 
-type Sanity = { exchangeProxy?: string; chainId?: number };
+//type Sanity = { exchangeProxy?: string; chainId?: number };
 
 export default function DemoModeBanner() {
   const [isMock, setIsMock] = React.useState(false);

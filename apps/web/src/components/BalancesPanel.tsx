@@ -11,7 +11,7 @@ import { toast } from "sonner";
 import { erc20Balance, erc20Allowance } from "@/lib/erc20";
 import { approveIfNeeded } from "@/lib/erc20";
 import { getZeroExDomainFallback } from "@/lib/zeroex";
-import { env } from "@/lib/env"; // ⬅️ añadido
+//import { env } from "@/lib/env"; // ⬅️ añadido
 import { revokeAllowance } from "@/lib/erc20";
 import { useMemo } from "react";
 
@@ -99,19 +99,7 @@ export default function BalancesPanel({ market }: Props) {
     const provider = signer.provider!;
     const { verifyingContract } = await getZeroExDomainFallback();
 
-    let spenderForAllow: `0x${string}` = verifyingContract as `0x${string}`;
-    try {
-      const base = env().NEXT_PUBLIC_API_BASE_URL;
-      const r = (await fetch(`${base}/readyz`).then((x) => x.json())) as {
-        allowanceSpender?: string;
-      } | null;
-      const s = r?.allowanceSpender;
-      if (typeof s === "string" && s.startsWith("0x") && s.length === 42) {
-        spenderForAllow = s as `0x${string}`;
-      }
-    } catch {
-      // ignore → fallback al EP ya asignado
-    }
+    const spenderForAllow: `0x${string}` = verifyingContract as `0x${string}`;
 
     // native ETH balance
     const ethBal = await provider.getBalance(me);

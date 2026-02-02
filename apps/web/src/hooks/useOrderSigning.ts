@@ -9,12 +9,13 @@ import {
   TypedDataEncoder,
   recoverAddress,
 } from "ethers";
-import { env, zeroExEP } from "@/lib/env";
+//import { env, zeroExEP } from "@/lib/env";
 import { useWallet } from "@/providers/wallet";
 // ⬇️ añadimos fetchTopOfBook
 import { Market, postOrder, fetchTopOfBook } from "@/lib/api";
 import { toast } from "sonner";
 import { postBuildCancelTx } from "@/lib/api";
+import { getZeroExDomainFallback } from "@/lib/zeroex";
 
 const FEE_BPS = Number(process.env.NEXT_PUBLIC_TAKER_FEE_BPS || "0");
 const FEE_RECIPIENT = (process.env.NEXT_PUBLIC_TAKER_FEE_RECIPIENT ||
@@ -87,29 +88,12 @@ const EIP712_TYPES: Record<string, TypedDataField[]> = {
 
 /** Fetch domain (dev helper) from the backend sanity route. */
 async function getZeroExDomain(): Promise<ZeroExDomain> {
-  const base = env().NEXT_PUBLIC_API_BASE_URL;
-
-  try {
-    const r = await fetch(`${base}/readyz`, { cache: "no-store" });
-    if (r.ok) {
-      const j = (await r.json()) as { exchangeProxy?: string } | null;
-      const ep = (j?.exchangeProxy as `0x${string}`) ?? zeroExEP();
-      return {
-        name: "ZeroEx",
-        version: "1.0.0",
-        chainId: env().NEXT_PUBLIC_CHAIN_ID,
-        verifyingContract: ep,
-      };
-    }
-  } catch {
-    /* ignore → fallback below */
-  }
-
+  const { chainId, verifyingContract } = await getZeroExDomainFallback();
   return {
     name: "ZeroEx",
     version: "1.0.0",
-    chainId: env().NEXT_PUBLIC_CHAIN_ID,
-    verifyingContract: zeroExEP(),
+    chainId,
+    verifyingContract,
   } as const;
 }
 

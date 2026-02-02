@@ -43,7 +43,7 @@ import { useWallet } from "@/providers/wallet";
 import { zeroExEP } from "@/lib/env";
 import { erc20Allowance, erc20Balance } from "@/lib/erc20";
 import { getZeroExDomainFallback } from "@/lib/zeroex";
-import { env } from "@/lib/env";
+// import { env } from "@/lib/env";
 import MarketSwitcher from "@/components/MarketSwitcher";
 import { CancelPairControls } from "@/components/CancelPairControls";
 import { getFeeInfo } from "@/lib/fees";
@@ -75,7 +75,9 @@ export default function MarketPage() {
   const [trades, setTrades] = useState<TradeItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [lastUpdated, setLastUpdated] = useState<string>("");
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [refreshing, setRefreshing] = useState(false);
 
   // maker state
@@ -122,19 +124,7 @@ export default function MarketPage() {
 
   const resolveAllowanceSpender = useCallback(async (): Promise<`0x${string}`> => {
     const { verifyingContract } = await getZeroExDomainFallback();
-    let spender = verifyingContract as `0x${string}`;
-    try {
-      const base = env().NEXT_PUBLIC_API_BASE_URL;
-      const r = (await fetch(`${base}/readyz`).then((x) => x.json())) as {
-        allowanceSpender?: string;
-      } | null;
-      const s = r?.allowanceSpender;
-      if (typeof s === "string" && s.startsWith("0x") && s.length === 42) {
-        spender = s as `0x${string}`;
-      }
-    } catch {
-      /* fallback to EP */
-    }
+    const spender = verifyingContract as `0x${string}`;
     return spender;
   }, []);
 
