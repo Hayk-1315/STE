@@ -6,7 +6,7 @@ import React, { useMemo, useState } from "react";
 import { ethers } from "ethers";
 import type { Market } from "@/lib/api";
 import { postMatchQuote } from "@/lib/api";
-//import { env, zeroExEP } from "@/lib/env";
+import { env } from "@/lib/env";
 import { useWallet } from "@/providers/wallet";
 import { toast } from "sonner";
 import { validateLimitInput } from "@/lib/validation";
@@ -105,6 +105,17 @@ export default function TakerBox({ market }: Props) {
   const [takerFee, setTakerFee] = useState<bigint>(BigInt(0));
   const [feeRecipient, setFeeRecipient] = useState<`0x${string}` | null>(null);
   const short = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
+
+  // Devuelve { label, explorerTxBase } según NEXT_PUBLIC_CHAIN_ID
+  const { label: chainLabel, explorerTxBase } = React.useMemo(() => {
+    const id = Number(env().NEXT_PUBLIC_CHAIN_ID);
+    if (id === 8453) return { label: "Base", explorerTxBase: "https://basescan.org/tx/" };
+    if (id === 11155111)
+      return { label: "Sepolia", explorerTxBase: "https://sepolia.etherscan.io/tx/" };
+    if (id === 84532)
+      return { label: "Base Sepolia", explorerTxBase: "https://sepolia.basescan.org/tx/" };
+    return { label: `Chain ${id}`, explorerTxBase: "https://etherscan.io/tx/" }; // fallback genérico
+  }, []);
 
   // Rellena el Taker al pulsar "Take" en el orderbook
   React.useEffect(() => {
@@ -367,9 +378,9 @@ export default function TakerBox({ market }: Props) {
       window.dispatchEvent(new CustomEvent("ste:refresh"));
 
       toast.success(
-        Array.isArray(txList) && txList.length > 0
+        (Array.isArray(txList) && txList.length > 0
           ? "Trade executed (multi-fill)"
-          : "Trade executed",
+          : "Trade executed") + ` · ${chainLabel}`,
         { duration: 3500 },
       );
     } catch (e) {
@@ -672,12 +683,12 @@ export default function TakerBox({ market }: Props) {
               txHash: {result.txHash}
               <div>
                 <a
-                  href={`https://sepolia.basescan.org/tx/${result.txHash}`}
+                  href={`${explorerTxBase}${result.txHash}`}
                   target="_blank"
                   rel="noreferrer"
                   className="underline text-sky-300 hover:text-sky-200"
                 >
-                  View on BaseScan
+                  View on {chainLabel} explorer
                 </a>
               </div>
             </div>
