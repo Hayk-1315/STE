@@ -222,10 +222,10 @@ export class OrderBookService {
       const filledAll: boolean = exec >= rem;
 
       // registrar trade
-      const px = opts?.priceTicks ?? (core ? core.priceTicks : 0n);
+      /*const px = opts?.priceTicks ?? (core ? core.priceTicks : 0n);
       if (px > 0n) {
         await this.repo.addTrade(ctx.id, orderHash, takerLower, px, exec);
-      }
+      }*/
 
       await this.repo.decreaseOrderRemaining(
         orderHash,
