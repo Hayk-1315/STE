@@ -21,6 +21,7 @@ const schema = z.object({
     .string()
     .regex(/^0x[0-9a-fA-F]{40}$/, "Invalid address")
     .optional(),
+  NEXT_PUBLIC_WEB3AUTH_NETWORK: z.string().optional(),
 });
 
 type Env = z.infer<typeof schema>;
@@ -37,6 +38,7 @@ export function env(): Env {
     NEXT_PUBLIC_PROFILE: process.env.NEXT_PUBLIC_PROFILE,
     NEXT_PUBLIC_TAKER_FEE_BPS: process.env.NEXT_PUBLIC_TAKER_FEE_BPS,
     NEXT_PUBLIC_TAKER_FEE_RECIPIENT: process.env.NEXT_PUBLIC_TAKER_FEE_RECIPIENT,
+    NEXT_PUBLIC_WEB3AUTH_NETWORK: process.env.NEXT_PUBLIC_WEB3AUTH_NETWORK,
   });
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");

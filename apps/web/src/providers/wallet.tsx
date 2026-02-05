@@ -35,7 +35,8 @@ type WalletState = {
 const Ctx = createContext<WalletState | null>(null);
 
 export function WalletProvider({ children }: { children: React.ReactNode }) {
-  const { NEXT_PUBLIC_CHAIN_ID, NEXT_PUBLIC_WEB3AUTH_CLIENT_ID } = env();
+  const { NEXT_PUBLIC_CHAIN_ID, NEXT_PUBLIC_WEB3AUTH_CLIENT_ID, NEXT_PUBLIC_WEB3AUTH_NETWORK } =
+    env();
 
   const [address, setAddress] = useState<`0x${string}` | undefined>();
   const [chainId, setChainId] = useState<number | undefined>();
@@ -96,9 +97,13 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       });
 
       // 2) Modal + adapter (ambos con el provider)
+      const web3AuthNetwork =
+        (NEXT_PUBLIC_WEB3AUTH_NETWORK as "sapphire_mainnet" | "sapphire_devnet") ||
+        "sapphire_devnet";
+
       const w3a = new Web3AuthModal({
         clientId: NEXT_PUBLIC_WEB3AUTH_CLIENT_ID,
-        web3AuthNetwork: "sapphire_devnet",
+        web3AuthNetwork, // ← AHORA usa la red desde env
         privateKeyProvider,
       } as ModalOptions);
 
@@ -122,7 +127,12 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     providerRef.current = new ethers.BrowserProvider(provider as unknown as Eip1193Provider, "any");
     await hydrateFromProvider(providerRef.current);
     setSource("web3auth");
-  }, [NEXT_PUBLIC_WEB3AUTH_CLIENT_ID, NEXT_PUBLIC_CHAIN_ID, hydrateFromProvider]);
+  }, [
+    NEXT_PUBLIC_WEB3AUTH_CLIENT_ID,
+    NEXT_PUBLIC_CHAIN_ID,
+    NEXT_PUBLIC_WEB3AUTH_NETWORK,
+    hydrateFromProvider,
+  ]);
 
   // ---- Disconnect ----
   const disconnect = useCallback(async () => {
