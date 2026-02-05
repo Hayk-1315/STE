@@ -17,6 +17,8 @@ import {
   recoverAddress,
   keccak256,
   toUtf8Bytes,
+  JsonRpcProvider,
+  Contract,
 } from 'ethers';
 import { ZeroExTxBuildersService } from '../zeroex/tx-builders.service';
 import { MetricsService } from '../observability/metrics.service';
@@ -276,6 +278,33 @@ export class OrdersController {
       priceTicks = num / den;
       if (num % den !== 0n) {
         throw new BadRequestException('price_tick_violation');
+      }
+    }
+    // --- Maker free-balance guard (mínimo intrusivo) ---
+    const openBase = await this.repo.sumOpenBaseByMakerSymbol(
+      makerExpected,
+      market.symbol,
+    );
+
+    const rpc = process.env.RPC_URL_READONLY ?? process.env.RPC_URL;
+    if (!rpc) {
+      // Si faltase el RPC, no tiramos el server; solo avisamos y seguimos (modo dev)
+      console.warn(
+        '[orders] balance guard skipped: missing RPC_URL(_READONLY)',
+      );
+    } else {
+      const provider = new JsonRpcProvider(rpc);
+      const erc20 = new Contract(
+        ctx.baseAddress,
+        ['function balanceOf(address) view returns (uint256)'],
+        provider,
+      );
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+      const onchain: bigint = await erc20.balanceOf(makerExpected);
+
+      if (openBase + sizeBase > onchain) {
+        throw new BadRequestException('maker_insufficient_free_balance');
       }
     }
 

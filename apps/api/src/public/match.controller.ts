@@ -382,4 +382,34 @@ export class MatchController {
       ...(noTxReason ? { noTxReason } : {}),
     };
   }
+  @Post('match/apply')
+  async apply(
+    @Body()
+    b: {
+      marketId: string;
+      fills: Array<{ orderHash: string; execBase: string }>;
+    },
+  ) {
+    if (!b?.marketId || !Array.isArray(b?.fills)) {
+      throw new BadRequestException('marketId and fills[] are required');
+    }
+
+    for (const f of b.fills) {
+      const orderHash = String(f.orderHash ?? '').toLowerCase();
+      const execBase = BigInt(String(f.execBase ?? '0'));
+      if (!orderHash || execBase <= 0n) continue;
+
+      // Aplica al LOB+DB; idempotente por remaining
+      await this.ob.applyExternalFill(b.marketId, orderHash, execBase);
+    }
+
+    // métricas opcionales
+    try {
+      this.metrics.fillsTotal?.inc?.();
+    } catch {
+      /* empty */
+    }
+
+    return { ok: true, applied: b.fills.length };
+  }
 }

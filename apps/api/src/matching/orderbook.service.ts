@@ -46,6 +46,8 @@ if (!(g[__GLOBAL_LOB_KEY__] instanceof Map)) {
 }
 const globalBooks = g[__GLOBAL_LOB_KEY__] as LOBMap;
 
+const ZERO_ADDR = '0x0000000000000000000000000000000000000000' as const;
+
 function sortBids(bids: Order[]) {
   bids.sort((a, b) =>
     a.priceTicks === b.priceTicks
@@ -192,12 +194,14 @@ export class OrderBookService {
     marketIdOrSymbol: string,
     orderHash: string,
     execBase: bigint,
+    opts?: { taker?: `0x${string}`; priceTicks?: bigint },
   ): Promise<{ status: 'partial' | 'filled' | 'db_only' | 'not_found' }> {
     const ctx = await this.repo.getTradingContext(marketIdOrSymbol);
     const bookKey = ctx.symbol;
     const b = this.books.get(bookKey);
 
     const target = orderHash.toLowerCase();
+    const takerLower = (opts?.taker ?? ZERO_ADDR).toLowerCase();
 
     // ¿tenemos el nivel en memoria?
     const level =
@@ -216,6 +220,12 @@ export class OrderBookService {
 
       const exec: bigint = execBase > rem ? rem : execBase;
       const filledAll: boolean = exec >= rem;
+
+      // registrar trade
+      const px = opts?.priceTicks ?? (core ? core.priceTicks : 0n);
+      if (px > 0n) {
+        await this.repo.addTrade(ctx.id, orderHash, takerLower, px, exec);
+      }
 
       await this.repo.decreaseOrderRemaining(
         orderHash,
@@ -242,6 +252,11 @@ export class OrderBookService {
 
     // memoria + DB coherentes
     const exec = execBase > level.sizeBase ? level.sizeBase : execBase;
+
+    // ✅ registrar trade con el priceTicks del level
+    const px = opts?.priceTicks ?? level.priceTicks;
+    await this.repo.addTrade(ctx.id, orderHash, takerLower, px, exec);
+
     level.sizeBase -= exec;
 
     const newStatus = level.sizeBase > 0n ? 'PARTIALLY_FILLED' : 'FILLED';

@@ -120,11 +120,12 @@ export class ZeroExTxBuildersService {
     const { exchangeProxy } = this.addr.resolve();
     const chainId = parseZeroExEnv(process.env).chainId;
 
-    // Guard para Base mainnet (y forks de Base) si el EP no soporta batch en tu despliegue
-    if (chainId === 8453) {
+    // Fuerza fallback secuencial en redes donde el EP no expone batch:
+    // - 8453 Base mainnet
+    // - 11155111 Ethereum Sepolia
+    if (chainId === 8453 || chainId === 11155111) {
       throw new Error(
-        '0x batchFillLimitOrders isn’t implemented in the Base Exchange Proxy (chainId 8453). ' +
-          'On this network, STE v1 can only execute individual fills (fillLimitOrder).',
+        'batchFillLimitOrders disabled on this network; using sequential fillLimitOrder fallback',
       );
     }
 

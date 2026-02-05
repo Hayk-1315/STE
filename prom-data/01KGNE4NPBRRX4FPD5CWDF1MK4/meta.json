@@ -1,0 +1,18 @@
+{
+	"ulid": "01KGNE4NPBRRX4FPD5CWDF1MK4",
+	"minTime": 1770235200616,
+	"maxTime": 1770242400000,
+	"stats": {
+		"numSamples": 307232,
+		"numFloatSamples": 307232,
+		"numSeries": 138,
+		"numChunks": 2501
+	},
+	"compaction": {
+		"level": 1,
+		"sources": [
+			"01KGNE4NPBRRX4FPD5CWDF1MK4"
+		]
+	},
+	"version": 1
+}

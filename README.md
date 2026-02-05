@@ -1,6 +1,6 @@
 # SkyTrade Exchange (STE)
 
-A minimal, production-flavored spot DEX front-to-back: clean UI (Next.js/React), a typed API (NestJS) with orderbook + WS, on-chain cancel/allowance flow, and observability (Prometheus/Grafana). Built to demonstrate a near-production architecture—fast to try, easy to reason about.
+A production-flavored spot DEX front-to-back: clean UI (Next.js/React), a typed API (NestJS) with orderbook + WS, on-chain cancel/allowance flow, and observability (Prometheus/Grafana). Built to demonstrate a near-production architecture—fast to try, easy to reason about.
 
 ## TL;DR
 
@@ -15,12 +15,12 @@ Two live profiles are recommended:
 
 ### Demo – Base Mainnet (read-only)
 
-`https://demo.example.com`  
+`https://ste-web-five.vercel.app`  
 **What you can do:** browse markets, live orderbook, recent trades, balances (read-only), health/WS indicators. Execution/approve disabled to avoid mainnet risk.
 
 ### Dev – Base Sepolia (interactive)
 
-`https://dev.example.com`  
+`https://ste-websepolia.vercel.app`  
 **What you can do:** connect wallet, approve (if needed), place/cancel orders, watch live orderbook/trades update.  
 **Optional metrics dashboard:** `http://localhost:3002` (see **Observability** below).
 

@@ -373,6 +373,26 @@ export default function TakerBox({ market }: Props) {
         txHash: lastHash,
         txData: q?.txData as TxData | undefined,
       });
+      try {
+        // Si el backend devolvió fills y tú ya ejecutaste la/las tx(s), “aplica”
+        const fillsForApply = Array.isArray(q?.fills)
+          ? q!.fills.map((f: any) => ({
+              orderHash: String(f.makerOrderHash),
+              execBase: String(f.sizeBase), // ya viene en base units del plan
+            }))
+          : [];
+
+        if (market && fillsForApply.length > 0) {
+          const base = process.env.NEXT_PUBLIC_API_BASE_URL!;
+          await fetch(`${base}/match/apply`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ marketId: market.symbol, fills: fillsForApply }),
+          });
+        }
+      } catch {
+        // si falla, no bloquea la UX; el watcher lo acabará aplicando
+      }
 
       // Refresca UI
       window.dispatchEvent(new CustomEvent("ste:refresh"));

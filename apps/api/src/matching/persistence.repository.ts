@@ -152,6 +152,24 @@ export class PersistenceRepository {
     }));
   }
 
+  async sumOpenBaseByMakerSymbol(
+    maker: string,
+    symbol: string,
+  ): Promise<bigint> {
+    const agg = await this.prisma.order.aggregate({
+      _sum: { remainingBase: true },
+      where: {
+        maker: maker.trim().toLowerCase(),
+        market: { symbol },
+        status: { in: [OrderStatus.PLACED, OrderStatus.PARTIALLY_FILLED] },
+      },
+    });
+
+    const s = agg._sum.remainingBase as unknown;
+    // Prisma.Decimal | null → bigint
+    return s ? BigInt((s as { toString(): string }).toString()) : 0n;
+  }
+
   async getTradingContext(marketOrSymbol: string): Promise<TradingContext> {
     const m = await this.prisma.market.findFirst({
       where: { OR: [{ id: marketOrSymbol }, { symbol: marketOrSymbol }] },
