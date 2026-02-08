@@ -382,7 +382,7 @@ export class MatchController {
     };
   }
   @Post('match/apply')
-  apply(
+  async apply(
     @Body()
     b: {
       marketId: string;
@@ -393,23 +393,36 @@ export class MatchController {
       throw new BadRequestException('marketId and fills[] are required');
     }
 
+    // Flag: ¿tenemos watcher on-chain activo?
+    const watcherEnabled = (process.env.DEV_ONCHAIN_WATCHER ?? '') === '1';
+
     for (const f of b.fills) {
       const orderHash = String(f.orderHash ?? '').toLowerCase();
       const execBase = BigInt(String(f.execBase ?? '0'));
       if (!orderHash || execBase <= 0n) continue;
 
-      // Aplica al LOB+DB; idempotente por remaining
-      /*await this.ob.applyExternalFill(b.marketId, orderHash, execBase);
-      this.logger.log(
-        `match/apply: market=${b.marketId} fills=${b.fills.length}`,
-      );*/
+      if (!watcherEnabled) {
+        // MODO SIN WATCHER → aplica aquí
+        await this.ob.applyExternalFill(b.marketId, orderHash, execBase);
+        this.logger.log(
+          `match/apply: market=${b.marketId} fills=${b.fills.length}`,
+        );
+      } else {
+        // MODO CON WATCHER → que lo haga FillWatcher
+        this.logger.log(
+          `match/apply (noop, watcher enabled): market=${b.marketId} fills=${b.fills.length}`,
+        );
+      }
     }
 
-    // métricas opcionales
-    try {
-      this.metrics.fillsTotal?.inc?.();
-    } catch {
-      /* empty */
+    // métricas opcionales: solo sumamos aquí si no hay watcher,
+    // porque el watcher también incrementa fillsTotal
+    if (!watcherEnabled) {
+      try {
+        this.metrics.fillsTotal?.inc?.();
+      } catch {
+        /* empty */
+      }
     }
 
     return { ok: true, applied: b.fills.length };
