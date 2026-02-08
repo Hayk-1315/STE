@@ -1,5 +1,4 @@
 // apps/api/src/public/match.controller.ts
-
 import {
   Body,
   Controller,
@@ -48,7 +47,7 @@ function toBig(v: unknown): bigint {
   if (typeof v === 'bigint') return v;
   if (typeof v === 'number') return BigInt(v);
   if (typeof v === 'string') return BigInt(v); // decimal string
-  return 0n;
+  return 0n; // apps/api/src/public/match.controller.ts
 }
 function toNum(v: unknown): number {
   if (typeof v === 'number') return v;
@@ -383,7 +382,7 @@ export class MatchController {
     };
   }
   @Post('match/apply')
-  async apply(
+  apply(
     @Body()
     b: {
       marketId: string;
@@ -400,7 +399,10 @@ export class MatchController {
       if (!orderHash || execBase <= 0n) continue;
 
       // Aplica al LOB+DB; idempotente por remaining
-      await this.ob.applyExternalFill(b.marketId, orderHash, execBase);
+      /*await this.ob.applyExternalFill(b.marketId, orderHash, execBase);
+      this.logger.log(
+        `match/apply: market=${b.marketId} fills=${b.fills.length}`,
+      );*/
     }
 
     // métricas opcionales

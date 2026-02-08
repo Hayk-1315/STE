@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // apps/web/src/providers/wallet.tsx
 // Purpose: Simple wallet context with Injected (EIP-1193) + Web3Auth modal (happy path).
 
