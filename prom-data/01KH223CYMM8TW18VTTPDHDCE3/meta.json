@@ -1,0 +1,18 @@
+{
+	"ulid": "01KH223CYMM8TW18VTTPDHDCE3",
+	"minTime": 1770580800247,
+	"maxTime": 1770588000000,
+	"stats": {
+		"numSamples": 3415,
+		"numFloatSamples": 3415,
+		"numSeries": 5,
+		"numChunks": 35
+	},
+	"compaction": {
+		"level": 1,
+		"sources": [
+			"01KH223CYMM8TW18VTTPDHDCE3"
+		]
+	},
+	"version": 1
+}

@@ -1,6 +1,8 @@
-# SkyTrade Exchange (STE)
+# Hybrid Exchange (STE)
 
-A production-flavored spot DEX front-to-back: clean UI (Next.js/React), a typed API (NestJS) with orderbook + WS, on-chain cancel/allowance flow, and observability (Prometheus/Grafana). Built to demonstrate a near-production architecture—fast to try, easy to reason about.
+End-to-end hybrid DEX: a trading UI in Next.js/React, a strongly-typed NestJS API with in-memory limit order book backed by PostgreSQL, and on-chain settlement via 0x protocol (quotes, fills, partial fills, multifills, cancels and allowance flow).  
+Includes WebSocket feeds, maker/taker panels, on-chain watchers for fills and cancels, health checks, and metrics wired into Prometheus/Grafana.  
+Built as a near-production architecture: easy to spin up, easy to reason about, and focused on real trading flows rather than toy examples.
 
 ## TL;DR
 
@@ -24,11 +26,9 @@ Two live profiles are recommended:
 **What you can do:** connect wallet, approve (if needed), place/cancel orders, watch live orderbook/trades update.  
 **Optional metrics dashboard:** `http://localhost:3002` (see **Observability** below).
 
-> Replace the URLs above with your Vercel deployments when ready.
-
 ---
 
-## Quick Tour (2 minutes)
+## Quick Tour
 
 - **Maker (limit)** – place a limit order with tick controls and TIF/policies enforced.
 - **Taker (market)** – quote → (optional) approve → execute, with allowance and gas checks.
@@ -60,7 +60,7 @@ Two live profiles are recommended:
 
 ## Environments & Profiles
 
-You’ll keep **two deploys** (simpler and safer than hot-switching):
+**two deploys**:
 
 ### DEV (Base Sepolia, interactive)
 
@@ -75,8 +75,6 @@ You’ll keep **two deploys** (simpler and safer than hot-switching):
 - **markets.json:** Mainnet token addresses
 - **0x addresses:** Base mainnet EP/targets
 - **Read-only** (disable/guard mutating endpoints and buttons)
-
-> In the UI, clearly label the mode (“Read-only on Base Mainnet”).
 
 ### FEES policy
 
@@ -93,8 +91,8 @@ You’ll keep **two deploys** (simpler and safer than hot-switching):
 
 ```ini
 NEXT_PUBLIC_API_BASE_URL=https://api-dev.example.com   # or api-demo for mainnet demo
-NEXT_PUBLIC_CHAIN_ID=84532                             # 84532=Base Sepolia, 8453=Base
-NEXT_PUBLIC_PROFILE=sepolia                            # "sepolia" or "mainnet"
+NEXT_PUBLIC_CHAIN_ID=84532 or 8453                     # 84532=Base Sepolia, 8453=Base
+NEXT_PUBLIC_PROFILE=Sepolia or Base                    # "sepolia" or "mainnet"
 ```
 
 ### Backend (NestJS)
@@ -113,8 +111,8 @@ READ_ONLY=false                 # true for the mainnet demo instance
 
 Two files (example):
 
-- `markets.sepolia.json` – test tokens/decimals/ids
-- `markets.mainnet.json` – mainnet tokens
+- `markets.sepolia.json` – Sepolia test tokens/decimals/ids
+- `markets.mainnet.json` – Base Mainnet real tokens
 
 Select file by deploy (build arg/ENV or separate branches).
 
@@ -155,7 +153,7 @@ pnpm dev
 
 ---
 
-## Observability (optional, adds polish)
+## Observability
 
 ### Prometheus
 
@@ -204,21 +202,12 @@ docker run -d --name ste-grafana `
 
 ---
 
-## Roadmap / Nice-to-have
-
-- Advanced UI theming & charting
-- Per-account positions/PNL (if you add it later)
-- More tests & synthetic load harness
-- CI/CD pipelines (lint, typecheck, build, smoke)
-
----
-
 ## License
 
-MIT (or your choice).
+MIT
 
 ---
 
 ## Credits
 
-0x Protocol, Base, Ethers, Next.js, NestJS, Prisma, Prometheus, Grafana.
+0x Protocol, Base, Sepolia, Ethers, Next.js, NestJS, Prisma, Prometheus, Grafana.
