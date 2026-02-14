@@ -16,3 +16,6 @@ apps/api/.cache/
 
 prom-data/
 grafana-data/
+
+**/dist/
+**/.next/
