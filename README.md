@@ -1,53 +1,57 @@
-# Hybrid Exchange (STE)
+# STE — Hybrid Exchange (Full-Stack 0x DEX)
 
-End-to-end hybrid DEX: a trading UI in Next.js/React, a strongly-typed NestJS API with in-memory limit order book backed by PostgreSQL, and on-chain settlement via 0x protocol (quotes, fills, partial fills, multifills, cancels and allowance flow).  
-Includes WebSocket feeds, maker/taker panels, on-chain watchers for fills and cancels, health checks, and metrics wired into Prometheus/Grafana.  
-Built as a near-production architecture: easy to spin up, easy to reason about, and focused on real trading flows rather than toy examples.
+End-to-end hybrid DEX architecture:
 
-## TL;DR
+- **Next.js / React trading UI**
+- **NestJS API with in-memory limit order book**
+- **PostgreSQL persistence (Prisma)**
+- **On-chain settlement via 0x Exchange Proxy**
+- **WebSocket feeds (book, trades, orders)**
+- **On-chain reconciliation (fills & cancels watchers)**
+- **Prometheus metrics + optional Grafana dashboard**
 
-Two live profiles are recommended:
-
-- **Demo (Base Mainnet, read-only)** – see real markets safely.
-- **Dev (Base Sepolia, interactive)** – place a tiny trade and watch metrics.
-
----
-
-## Live Demos
-
-### Demo – Base Mainnet (read-only)
-
-`https://ste-web-five.vercel.app`  
-**What you can do:** browse markets, live orderbook, recent trades, balances (read-only), health/WS indicators. Execution/approve disabled to avoid mainnet risk.
-
-### Dev – Base Sepolia (interactive)
-
-`https://ste-websepolia.vercel.app`  
-**What you can do:** connect wallet, approve (if needed), place/cancel orders, watch live orderbook/trades update.  
-**Optional metrics dashboard:** `http://localhost:3002` (see **Observability** below).
+Built as a near-production architecture focused on real trading flows.
 
 ---
 
-## Video walkthroughs (Loom)
+## Live Profiles
 
-To make it easier to understand how the app works end-to-end, here are a few short Loom videos:
+### Demo — Base Mainnet (Read-Only)
 
-1. **Video 1 – Quick tour of the UI (Base Mainnet, read-only).**  
-   https://www.loom.com/share/8dfb8933950744c8b8878a5b0227465a  
+https://ste-web-five.vercel.app
 
-2. **Video 2 – Sepolia Ethereum. Maker (sell) Place Limit, Approve and Cancel**   
-   https://www.loom.com/share/3bcea1ac76a546f1816d3c0ec638827a  
+- Browse markets
+- Live orderbook & recent trades
+- Balances & allowances (read-only)
+- Execution disabled to avoid mainnet risk
 
-3. **Video 3 – Taker (buy), Quote, Approve and Execute**   
-   https://www.loom.com/share/e495d9d8cc2e42d59b8ba7434fc2108e  
+### Dev — Ethereum Sepolia (Interactive)
 
-4. **Video 4 – Multifill flow**  
+https://ste-websepolia.vercel.app
+
+- Connect wallet
+- Approve tokens
+- Place & cancel limit orders
+- Execute taker trades
+- Partial fills & sequential multifill
+- Live reconciliation via on-chain watchers
+
+---
+
+## Video Walkthroughs
+
+Short Loom demos explaining the full flow:
+
+1. Mainnet read-only tour
+   https://www.loom.com/share/8dfb8933950744c8b8878a5b0227465a 
+2. Maker flow (place / approve / cancel)  
+   https://www.loom.com/share/3bcea1ac76a546f1816d3c0ec638827a
+3. Taker flow (quote / approve / execute)  
+   https://www.loom.com/share/e495d9d8cc2e42d59b8ba7434fc2108e
+4. Multifill (sequential txs)
    https://www.loom.com/share/3c0adc118c954515be268935c04f106c  
-
-5. **Video 5 – Partial fill flow**  
-   https://www.loom.com/share/5b6dc4691fc3427b99e05f3f439f4e5e  
-
-> If you have any trouble watching the videos or accessing Loom, feel free to reach out.
+5. Partial fill 
+   https://www.loom.com/share/5b6dc4691fc3427b99e05f3f439f4e5e
 
 ---
 
@@ -69,14 +73,14 @@ To make it easier to understand how the app works end-to-end, here are a few sho
 ┌─────────────────────────┐        REST + Socket.IO (WS)
 │   Next.js UI (apps/web) │ <────────────────────────────────────┐
 └───────────┬─────────────┘                                      │
-            │                                                     │
-            │ REST (markets, quote, orderbook, trades)            │
-            │ WS  (book snapshots, orders feed, trades feed)      │
-            ▼                                                     │
-┌─────────────────────────┐      Prisma      ┌────────────────────┴─────────────┐
-│  NestJS API (apps/api)  │ ───────────────► │            Postgres              │
-│  - matching / LOB       │                  │  orders / trades / events / ...  │
-│  - WS gateways          │                  └──────────────────────────────────┘
+            │                                                    │
+            │ REST (markets, quote, orderbook, trades)           │
+            │ WS  (book snapshots, orders feed, trades feed)     │
+            ▼                                                    │
+┌─────────────────────────┐      Prisma      ┌───────────────────┴─────────────┐
+│  NestJS API (apps/api)  │ ───────────────► │            Postgres             │
+│  - matching / LOB       │                  │  orders / trades / events / ... │
+│  - WS gateways          │                  └─────────────────────────────────┘
 │  - fee + guardrails     │
 │  - observability        │
 │  - schedulers/ticks     │
@@ -85,14 +89,22 @@ To make it easier to understand how the app works end-to-end, here are a few sho
             │  (fills / cancels reconciliation)
             ▼
 ┌─────────────────────────┐
-│   0x Exchange Proxy EP   │  (Base mainnet / Sepolia depending on profile)
+│   0x Exchange Proxy EP  │  (Base mainnet / Sepolia depending on profile)
 └─────────────────────────┘
 
 ```
 
-- Profiles: **DEV (Base Sepolia)** for interactive testing, **DEMO (Base Mainnet)** read-only.
-- WS: broadcast top-10 snapshots per subscribed symbol, orders room per address.
-- Metrics: Prometheus counters/gauges/histograms; optional Grafana dashboard.
+### Key Concepts
+
+- In-memory order book backed by DB persistence
+- Deterministic reconciliation via on-chain watchers
+- Separate profiles:
+  - **DEMO (Mainnet, read-only)**
+  - **DEV (Sepolia, interactive)**
+- WebSocket rooms:
+  - `book:<symbol>`
+  - `orders:<address>`
+  - `trades:<symbol>`
 
 ---
 
@@ -102,9 +114,9 @@ To make it easier to understand how the app works end-to-end, here are a few sho
 
 ### DEV (Ethereum Sepolia, interactive)
 
-- **RPC_URL / RPC_URL_READONLY:** Base Sepolia
-- **markets.json:** Sepolia token addresses
-- **0x addresses:** Base Sepolia EP/targets
+- **RPC_URL / RPC_URL_READONLY:** Ethereum Sepolia
+- **markets.json:** Ethereum Sepolia token addresses
+- **0x addresses:** Ethereum Sepolia EP/targets
 - **Trading enabled** (approve/execute), for cheap real demos.
 
 ### DEMO (Base Mainnet, read-only)
@@ -126,50 +138,47 @@ To make it easier to understand how the app works end-to-end, here are a few sho
 
 ---
 
-## Quickstart Demo (Read-only Mainnet) --- Recommended
+## Quickstart Demo (Read-only Base Mainnet)
 
-**Requirements: Node 22, pnpm, Docker (recommended for Postgres)**
+### Requirements
+
+- Node 22
+- pnpm
+- Docker (for Postgres)
 
 ### 1. Install dependencies
 
-``` bash
+```bash
 pnpm install
 ```
 
 ### 2. Start Postgres
 
-``` bash
+```bash
 pnpm db:up
 pnpm prisma generate --schema apps/api/prisma/schema.prisma
 ```
 
-### 3. Create API env file
-
-Copy:
+### 3. Copy env files
 
     apps/api/.env.example → apps/api/.env
-
-### 4. Create Web env file
-
-Copy:
-
     apps/web/.env.local.example → apps/web/.env.local
 
-### 5. Run API (mainnet read-only)
+### 4. Run API
 
-``` bash
+```bash
 pnpm dev:api:mainnet
 ```
 
-### 6. Run Web
+### 5. Run Web
 
-``` bash
+```bash
 pnpm dev:web:mainnet
 ```
 
 Open: http://localhost:3000
 
-## Interactive Sepolia (Optional)
+## Quickstart Demo (Interactive Sepolia)
 
 ### 1. Copy env files
 
@@ -178,79 +187,86 @@ Open: http://localhost:3000
 
 ### 2. Run API
 
-``` bash
+```bash
 pnpm dev:api:sepolia
 ```
 
 ### 3. Run Web
 
-``` bash
+```bash
 pnpm dev:web:sepolia
 ```
 
 ---
 
-## Observability (optional)
+## Observability (Optional)
 
-The API exposes Prometheus metrics at:
+The API exposes Prometheus metrics:
 
-- `GET /metrics` (default: http://localhost:3001/metrics)
+```
+GET http://localhost:3001/metrics
+```
 
-This repo includes:
-- `prometheus.yml` (scrapes `host.docker.internal:3001/metrics`)
-- a sample Grafana dashboard: `dashboards/ste-realtime.json`
-- example output snapshot: `metrics_before.txt`
+Includes:
 
-### Quick check (no Docker)
+- Order lifecycle counters
+- Fills / cancels totals
+- WS broadcast metrics
+- Tick loop latency histogram
 
-1) Start the API
-2) Open: http://localhost:3001/metrics
+### Quick check (no Docker required)
 
-### Prometheus (Docker, optional)
+1. Start API
+2. Open:
+   ```
+   http://localhost:3001/metrics
+   ```
 
-> Works best on Docker Desktop (macOS/Windows) where `host.docker.internal` is available.
+### Prometheus (Optional)
 
-``` bash
-docker run -d --name ste-prom \
-  --add-host=host.docker.internal:host-gateway \
-  -p 9090:9090 \
-  -v "$(pwd)/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
-  prom/prometheus --config.file=/etc/prometheus/prometheus.yml
-``` 
+```bash
+docker run -d --name ste-prom   --add-host=host.docker.internal:host-gateway   -p 9090:9090   -v "$(pwd)/prometheus.yml:/etc/prometheus/prometheus.yml:ro"   prom/prometheus --config.file=/etc/prometheus/prometheus.yml
+```
 
-Open: http://localhost:9090
+Open:
+```
+http://localhost:9090
+```
 
-### Grafana (optional)
+### Grafana (Optional)
 
-``` bash
+```bash
 docker run -d --name ste-grafana -p 3002:3000 grafana/grafana
-``` 
-Open: http://localhost:3002 (default login: admin / admin)
-Then:
-- Add Prometheus datasource: http://host.docker.internal:9090
-- Import dashboard: dashboards/ste-realtime.json
+```
 
----
+Then:
+
+- Open http://localhost:3002
+- Add Prometheus datasource → `http://host.docker.internal:9090`
+- Import dashboard:
+  ```
+  dashboards/ste-realtime.json
+  ```
 
 ### Key metrics (examples used in the dashboard)
 
 - **WS Broadcasts rate (/s):** emissions to book rooms per second.
 - **WS Subscribers:** current subscribers across symbols.
 - **WS tick p95 (ms, 5m):** loop latency percentile.
-- **Orders/Quotes/Fills/Cancels:** both `rate()` and cumulative “totals”.
+- **Orders/Quotes/Fills/Cancels:** both rate() and cumulative “totals”.
 
 ---
 
 ## Security & Guardrails
 
-- No private keys in frontends or repo.
-- CORS allowlist per deploy.
-- Read-only flag enforced in the API for mainnet demo.
-- `/dev/*` endpoints disabled in non-dev builds.
+- No private keys stored anywhere
+- Mainnet profile is read-only (API enforced)
+- CORS allowlist per environment
+- On-chain reconciliation for fills & cancels
+- Explicit fee configuration per profile
 
 ---
 
 ## License
 
 MIT
-
