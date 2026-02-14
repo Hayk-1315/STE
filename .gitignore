@@ -5,8 +5,14 @@ dist
 .env.*
 **/.env
 **/.env.*
+# allow env example templates
+!.env.example
+!.env.*.example
+!**/.env.example
+!**/.env.*.example
 
 apps/api/.cache/
 **/.cache/
 
-
+prom-data/
+grafana-data/

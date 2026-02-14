@@ -28,6 +28,29 @@ Two live profiles are recommended:
 
 ---
 
+## Video walkthroughs (Loom)
+
+To make it easier to understand how the app works end-to-end, here are a few short Loom videos:
+
+1. **Video 1 – Quick tour of the UI (Base Mainnet, read-only).**  
+   https://www.loom.com/share/8dfb8933950744c8b8878a5b0227465a  
+
+2. **Video 2 – Sepolia Ethereum. Maker (sell) Place Limit, Approve and Cancel**   
+   https://www.loom.com/share/3bcea1ac76a546f1816d3c0ec638827a  
+
+3. **Video 3 – Taker (buy), Quote, Approve and Execute**   
+   https://www.loom.com/share/e495d9d8cc2e42d59b8ba7434fc2108e  
+
+4. **Video 4 – Multifill flow**  
+   https://www.loom.com/share/3c0adc118c954515be268935c04f106c  
+
+5. **Video 5 – Partial fill flow**  
+   https://www.loom.com/share/5b6dc4691fc3427b99e05f3f439f4e5e  
+
+> If you have any trouble watching the videos or accessing Loom, feel free to reach out.
+
+---
+
 ## Quick Tour
 
 - **Maker (limit)** – place a limit order with tick controls and TIF/policies enforced.
@@ -43,13 +66,28 @@ Two live profiles are recommended:
 ## Architecture
 
 ```
-[ Next.js (apps/web) ]  ───────── WebSocket (book, orders) ──┐
-        │  REST (markets, orderbook, trades)                  │
-        ▼                                                     ▼
-[ NestJS API (apps/api) ] ── Prisma ──► [ Postgres ]      [ 0x Exchange Proxy ]
-        │                                   │                 (Base: Sepolia/Mainnet)
-        ├── On-chain watchers (fills/cancels) │
-        └── Observability (Prometheus)      └── Job scheduler (ticks, replay)
+┌─────────────────────────┐        REST + Socket.IO (WS)
+│   Next.js UI (apps/web) │ <────────────────────────────────────┐
+└───────────┬─────────────┘                                      │
+            │                                                     │
+            │ REST (markets, quote, orderbook, trades)            │
+            │ WS  (book snapshots, orders feed, trades feed)      │
+            ▼                                                     │
+┌─────────────────────────┐      Prisma      ┌────────────────────┴─────────────┐
+│  NestJS API (apps/api)  │ ───────────────► │            Postgres              │
+│  - matching / LOB       │                  │  orders / trades / events / ...  │
+│  - WS gateways          │                  └──────────────────────────────────┘
+│  - fee + guardrails     │
+│  - observability        │
+│  - schedulers/ticks     │
+└───────────┬─────────────┘
+            │ JSON-RPC (read-only)
+            │  (fills / cancels reconciliation)
+            ▼
+┌─────────────────────────┐
+│   0x Exchange Proxy EP   │  (Base mainnet / Sepolia depending on profile)
+└─────────────────────────┘
+
 ```
 
 - Profiles: **DEV (Base Sepolia)** for interactive testing, **DEMO (Base Mainnet)** read-only.
@@ -62,7 +100,7 @@ Two live profiles are recommended:
 
 **two deploys**:
 
-### DEV (Base Sepolia, interactive)
+### DEV (Ethereum Sepolia, interactive)
 
 - **RPC_URL / RPC_URL_READONLY:** Base Sepolia
 - **markets.json:** Sepolia token addresses
@@ -76,6 +114,11 @@ Two live profiles are recommended:
 - **0x addresses:** Base mainnet EP/targets
 - **Read-only** (disable/guard mutating endpoints and buttons)
 
+### Markets configuration
+
+- Markets are defined in JSON files (mainnet vs sepolia).
+- The active set is selected by the environment profile (CHAIN_ID / NEXT_PUBLIC_PROFILE).
+
 ### FEES policy
 
 - Demo fee (Sepolia Ethereum): 0.10% → 0xe02c543d4e8c89ab1f76b414fc3c75adc44cec2a (dev only)
@@ -83,106 +126,111 @@ Two live profiles are recommended:
 
 ---
 
-## Configuration
+## Quickstart Demo (Read-only Mainnet) --- Recommended
 
-### Frontend (Next.js)
+**Requirements: Node 22, pnpm, Docker (recommended for Postgres)**
 
-**Environment** (Vercel project settings or `.env.local`):
+### 1. Install dependencies
 
-```ini
-NEXT_PUBLIC_API_BASE_URL=https://api-dev.example.com   # or api-demo for mainnet demo
-NEXT_PUBLIC_CHAIN_ID=84532 or 8453                     # 84532=Base Sepolia, 8453=Base
-NEXT_PUBLIC_PROFILE=Sepolia or Base                    # "sepolia" or "mainnet"
-```
-
-### Backend (NestJS)
-
-**Environment** (`apps/api/.env` per deploy):
-
-```ini
-DATABASE_URL=postgres://user:pass@host:5432/ste
-RPC_URL=...
-RPC_URL_READONLY=...
-EXCHANGE_PROXY=0x...            # 0x EP for that chain
-READ_ONLY=false                 # true for the mainnet demo instance
-```
-
-### Markets
-
-Two files (example):
-
-- `markets.sepolia.json` – Sepolia test tokens/decimals/ids
-- `markets.mainnet.json` – Base Mainnet real tokens
-
-Select file by deploy (build arg/ENV or separate branches).
-
----
-
-## Local Development
-
-Requires Node, pnpm, and Docker (for Postgres/Prom/Grafana).
-
-### Install deps
-
-```bash
+``` bash
 pnpm install
 ```
 
-### Database (local)
+### 2. Start Postgres
 
-```bash
-docker run -d --name ste_postgres -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16-alpine
-# set DATABASE_URL accordingly and run migrations if you have them
+``` bash
+pnpm db:up
+pnpm prisma generate --schema apps/api/prisma/schema.prisma
 ```
 
-### API (dev)
+### 3. Create API env file
 
-```bash
-cd apps/api
-pnpm dev
-# listens on http://localhost:3001
+Copy:
+
+    apps/api/.env.example → apps/api/.env
+
+### 4. Create Web env file
+
+Copy:
+
+    apps/web/.env.local.example → apps/web/.env.local
+
+### 5. Run API (mainnet read-only)
+
+``` bash
+pnpm dev:api:mainnet
 ```
 
-### Web (dev)
+### 6. Run Web
 
-```bash
-cd apps/web
-pnpm dev
-# listens on http://localhost:3000
+``` bash
+pnpm dev:web:mainnet
+```
+
+Open: http://localhost:3000
+
+## Interactive Sepolia (Optional)
+
+### 1. Copy env files
+
+    apps/api/.env.sepolia.example → apps/api/.env.sepolia
+    apps/web/.env.sepolia.local.example → apps/web/.env.sepolia.local
+
+### 2. Run API
+
+``` bash
+pnpm dev:api:sepolia
+```
+
+### 3. Run Web
+
+``` bash
+pnpm dev:web:sepolia
 ```
 
 ---
 
-## Observability
+## Observability (optional)
 
-### Prometheus
+The API exposes Prometheus metrics at:
 
-Place `prometheus.yml` in repo root (with `scrape_interval: 2s` and target `host.docker.internal:3001`), then run:
+- `GET /metrics` (default: http://localhost:3001/metrics)
 
-```powershell
-docker run -d --name ste-prom `
-  --add-host=host.docker.internal:host-gateway `
-  -p 9090:9090 `
-  -v ${PWD}\prometheus.yml:/etc/prometheus/prometheus.yml:ro `
-  -v ${PWD}\prom-data:/prometheus `
-  prom/prometheus `
-  --config.file=/etc/prometheus/prometheus.yml `
-  --storage.tsdb.path=/prometheus `
-  --storage.tsdb.retention.time=15d
-```
+This repo includes:
+- `prometheus.yml` (scrapes `host.docker.internal:3001/metrics`)
+- a sample Grafana dashboard: `dashboards/ste-realtime.json`
+- example output snapshot: `metrics_before.txt`
 
-### Grafana
+### Quick check (no Docker)
 
-```powershell
-docker run -d --name ste-grafana `
-  -p 3002:3000 `
-  -e GF_SECURITY_ADMIN_USER=admin `
-  -e GF_SECURITY_ADMIN_PASSWORD=admin `
-  -v ${PWD}\grafana-data:/var/lib/grafana `
-  grafana/grafana
-# Open http://localhost:3002 → add Prometheus DS: http://host.docker.internal:9090
-# Import the included dashboard JSON (dashboards/ste-realtime.json)
-```
+1) Start the API
+2) Open: http://localhost:3001/metrics
+
+### Prometheus (Docker, optional)
+
+> Works best on Docker Desktop (macOS/Windows) where `host.docker.internal` is available.
+
+``` bash
+docker run -d --name ste-prom \
+  --add-host=host.docker.internal:host-gateway \
+  -p 9090:9090 \
+  -v "$(pwd)/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
+  prom/prometheus --config.file=/etc/prometheus/prometheus.yml
+``` 
+
+Open: http://localhost:9090
+
+### Grafana (optional)
+
+``` bash
+docker run -d --name ste-grafana -p 3002:3000 grafana/grafana
+``` 
+Open: http://localhost:3002 (default login: admin / admin)
+Then:
+- Add Prometheus datasource: http://host.docker.internal:9090
+- Import dashboard: dashboards/ste-realtime.json
+
+---
 
 ### Key metrics (examples used in the dashboard)
 
@@ -206,8 +254,3 @@ docker run -d --name ste-grafana `
 
 MIT
 
----
-
-## Credits
-
-0x Protocol, Base, Sepolia, Ethers, Next.js, NestJS, Prisma, Prometheus, Grafana.

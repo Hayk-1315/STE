@@ -657,7 +657,7 @@ export default function MarketPage() {
               </div>
 
               {/* Tick controls */}
-              <div className="flex flex-wrap items-center gap-2 pt-1">
+              {/* <div className="flex flex-wrap items-center gap-2 pt-1">
                 <Button
                   type="button"
                   size="sm"
@@ -754,7 +754,7 @@ export default function MarketPage() {
                 >
                   set best
                 </Button>
-              </div>
+              </div>*/}
             </div>
 
             <PlaceLimitButton
