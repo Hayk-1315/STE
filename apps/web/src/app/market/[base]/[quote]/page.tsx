@@ -790,7 +790,11 @@ export default function MarketPage() {
                 <Button
                   type="button"
                   size="sm"
-                  onClick={() => {
+                  onClick={async () => {
+                    if (readOnly) {
+                      toast.message("Read-only mode");
+                      return;
+                    }
                     void onEnableMakerToken();
                   }}
                   disabled={checkingAllowance}

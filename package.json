@@ -27,7 +27,9 @@
     "dev:api:sepolia": "pnpm exec dotenv -e apps/api/.env.sepolia -- pnpm --filter ./apps/api run start:dev",
     "dev:api:mainnet": "pnpm exec dotenv -e apps/api/.env -- pnpm --filter ./apps/api run start:dev",
     "dev:web:sepolia": "pnpm exec dotenv -e apps/web/.env.sepolia.local -- pnpm --filter ./apps/web run dev",
-    "dev:web:mainnet": "pnpm exec dotenv -e apps/web/.env.local -- pnpm --filter ./apps/web run dev"
+    "dev:web:mainnet": "pnpm exec dotenv -e apps/web/.env.local -- pnpm --filter ./apps/web run dev",
+    "dev:stack:base": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev.base.ps1",
+    "dev:stack:sepolia": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev.sepolia.ps1"
   },
   "lint-staged": {
     "apps/web/**/*.{ts,tsx,js,jsx}": "pnpm --filter ./apps/web exec eslint --fix --",
@@ -35,6 +37,7 @@
     "*.{json,md,yml,yaml}": "pnpm exec prettier -w"
   },
   "devDependencies": {
+    "concurrently": "9.2.1",
     "dotenv-cli": "11.0.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.4",

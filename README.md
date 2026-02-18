@@ -42,15 +42,15 @@ https://ste-websepolia.vercel.app
 
 Short Loom demos explaining the full flow:
 
-1. Mainnet read-only tour    
-   - https://www.loom.com/share/8dfb8933950744c8b8878a5b0227465a 
-2. Maker flow (place / approve / cancel)      
+1. Mainnet read-only tour
+   - https://www.loom.com/share/8dfb8933950744c8b8878a5b0227465a
+2. Maker flow (place / approve / cancel)
    - https://www.loom.com/share/3bcea1ac76a546f1816d3c0ec638827a
-3. Taker flow (quote / approve / execute)      
+3. Taker flow (quote / approve / execute)
    - https://www.loom.com/share/e495d9d8cc2e42d59b8ba7434fc2108e
-4. Multifill (sequential txs)    
-   - https://www.loom.com/share/3c0adc118c954515be268935c04f106c  
-5. Partial fill     
+4. Multifill (sequential txs)
+   - https://www.loom.com/share/3c0adc118c954515be268935c04f106c
+5. Partial fill
    - https://www.loom.com/share/5b6dc4691fc3427b99e05f3f439f4e5e
 
 ---
@@ -144,7 +144,8 @@ Short Loom demos explaining the full flow:
 
 - Node 22
 - pnpm
-- Docker (for Postgres)
+- Docker Desktop (for Postgres)
+- Concurrently (already in repo deps)
 
 ### 1. Install dependencies
 
@@ -156,7 +157,6 @@ pnpm install
 
 ```bash
 pnpm db:up
-pnpm prisma generate --schema apps/api/prisma/schema.prisma
 ```
 
 ### 3. Copy env files
@@ -164,16 +164,10 @@ pnpm prisma generate --schema apps/api/prisma/schema.prisma
     apps/api/.env.example → apps/api/.env
     apps/web/.env.local.example → apps/web/.env.local
 
-### 4. Run API
+### 4. Run API and Web
 
 ```bash
-pnpm dev:api:mainnet
-```
-
-### 5. Run Web
-
-```bash
-pnpm dev:web:mainnet
+pnpm dev:stack:base
 ```
 
 Open: http://localhost:3000
@@ -185,17 +179,13 @@ Open: http://localhost:3000
     apps/api/.env.sepolia.example → apps/api/.env.sepolia
     apps/web/.env.sepolia.local.example → apps/web/.env.sepolia.local
 
-### 2. Run API
+### 2. Run API and Web
 
 ```bash
-pnpm dev:api:sepolia
+pnpm dev:stack:sepolia
 ```
 
-### 3. Run Web
-
-```bash
-pnpm dev:web:sepolia
-```
+Open: http://localhost:3000
 
 ---
 
@@ -229,6 +219,7 @@ docker run -d --name ste-prom   --add-host=host.docker.internal:host-gateway   -
 ```
 
 Open:
+
 ```
 http://localhost:9090
 ```
