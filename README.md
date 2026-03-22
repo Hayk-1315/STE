@@ -1,16 +1,16 @@
-# STE — Hybrid Exchange (Full-Stack 0x DEX)
+# STE — Full-Stack 0x-Based Hybrid DEX
 
 End-to-end hybrid DEX architecture:
 
 - **Next.js / React trading UI**
-- **NestJS API with in-memory limit order book**
-- **PostgreSQL persistence (Prisma)**
+- **NestJS API with off-chain order matching and in-memory limit order book**
+- **PostgreSQL persistence via Prisma**
 - **On-chain settlement via 0x Exchange Proxy**
-- **WebSocket feeds (book, trades, orders)**
-- **On-chain reconciliation (fills & cancels watchers)**
-- **Prometheus metrics + optional Grafana dashboard**
+- **WebSocket streams for order book, trades and orders**
+- **Event watchers for on-chain fills & cancels reconciliation**
+- **Prometheus metrics and Grafana dashboard**
 
-Built as a near-production architecture focused on real trading flows.
+This project is a serious prototype of a hybrid DEX architecture, designed to explore order matching, settlement flows and on-chain/off-chain coordination in decentralized trading systems. While not production-ready, it focuses on modeling realistic system behavior and key architectural decisions rather than production hardening.  
 
 ---
 
@@ -55,6 +55,39 @@ Short Loom demos explaining the full flow:
 
 ---
 
+## Architecture
+
+```
+┌─────────────────────────┐   HTTP (REST) + WebSocket (real-time)
+│   Next.js UI (apps/web) │ <────────────────────────────────────┐
+└───────────┬─────────────┘                                      │                    
+            │                                                    │
+            │ REST (markets, orderbook, trades, pricing)         │
+            │ WS  (orderbook, orders, trades streams)            │
+            ▼                                                    │
+┌─────────────────────────┐       Prisma     ┌───────────────────┴─────────────┐
+│  NestJS API (apps/api)  │ ───────────────► │            Postgres             │
+│- order matching         │                  │  orders / trades / events / ... │ 
+│  (in-memory LOB)        │                  └─────────────────────────────────┘  
+│- real-time data gateway │                     
+│  (WebSocket)            │                    
+│- fees + trading         │
+│  constraints            │
+│- metrics, logs          │
+│  & monitoring           │
+│- background jobs        │
+└───────────┬─────────────┘
+            │ JSON-RPC (read-only)
+            │ on-chain state & event reconciliation
+            ▼
+┌─────────────────────────┐
+│   0x Exchange Proxy EP  │  (Base mainnet / Sepolia depending on profile)
+└─────────────────────────┘
+
+```
+
+---
+
 ## Quick Tour
 
 - **Maker (limit)** – place a limit order with tick controls and TIF/policies enforced.
@@ -67,59 +100,18 @@ Short Loom demos explaining the full flow:
 
 ---
 
-## Architecture
-
-```
-┌─────────────────────────┐        REST + Socket.IO (WS)
-│   Next.js UI (apps/web) │ <────────────────────────────────────┐
-└───────────┬─────────────┘                                      │
-            │                                                    │
-            │ REST (markets, quote, orderbook, trades)           │
-            │ WS  (book snapshots, orders feed, trades feed)     │
-            ▼                                                    │
-┌─────────────────────────┐      Prisma      ┌───────────────────┴─────────────┐
-│  NestJS API (apps/api)  │ ───────────────► │            Postgres             │
-│  - matching / LOB       │                  │  orders / trades / events / ... │
-│  - WS gateways          │                  └─────────────────────────────────┘
-│  - fee + guardrails     │
-│  - observability        │
-│  - schedulers/ticks     │
-└───────────┬─────────────┘
-            │ JSON-RPC (read-only)
-            │  (fills / cancels reconciliation)
-            ▼
-┌─────────────────────────┐
-│   0x Exchange Proxy EP  │  (Base mainnet / Sepolia depending on profile)
-└─────────────────────────┘
-
-```
-
-### Key Concepts
-
-- In-memory order book backed by DB persistence
-- Deterministic reconciliation via on-chain watchers
-- Separate profiles:
-  - **DEMO (Mainnet, read-only)**
-  - **DEV (Sepolia, interactive)**
-- WebSocket rooms:
-  - `book:<symbol>`
-  - `orders:<address>`
-  - `trades:<symbol>`
-
----
-
 ## Environments & Profiles
 
 **Two deploys**:
 
-### DEV (Ethereum Sepolia, interactive)
+### Ethereum Sepolia (interactive)
 
 - **RPC_URL / RPC_URL_READONLY:** Ethereum Sepolia
 - **markets.json:** Ethereum Sepolia token addresses
 - **0x addresses:** Ethereum Sepolia EP/targets
 - **Trading enabled** (approve/execute), for cheap real demos.
 
-### DEMO (Base Mainnet, read-only)
+### Base Mainnet (read-only)
 
 - **RPC_URL / RPC_URL_READONLY:** Base Mainnet
 - **markets.json:** Mainnet token addresses
