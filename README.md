@@ -164,7 +164,7 @@ pnpm dev:stack:base
 
 Open: http://localhost:3000
 
-## Quickstart — Ethereum Sepolia (Interactive)
+## Quickstart - Ethereum Sepolia (Interactive)
 
 ### 1. Copy env files
 
