@@ -2,13 +2,13 @@
 
 End-to-end hybrid DEX architecture:
 
-- **Next.js / React trading UI**
-- **NestJS API with off-chain order matching and in-memory limit order book**
-- **PostgreSQL persistence via Prisma**
-- **On-chain settlement via 0x Exchange Proxy**
-- **WebSocket streams for order book, trades and orders**
-- **Event watchers for on-chain fills & cancels reconciliation**
-- **Prometheus metrics and Grafana dashboard**
+- Next.js / React trading UI
+- NestJS API with off-chain order matching and in-memory limit order book
+- PostgreSQL persistence via Prisma
+- On-chain settlement via 0x Exchange Proxy
+- WebSocket streams for order book, trades and orders
+- Event watchers for on-chain fills & cancels reconciliation
+- Prometheus metrics and Grafana dashboard
 
 This project is a serious prototype of a hybrid DEX architecture, designed to explore order matching, settlement flows and on-chain/off-chain coordination in decentralized trading systems. While not production-ready, it focuses on modeling realistic system behavior and key architectural decisions rather than production hardening.  
 
@@ -16,16 +16,16 @@ This project is a serious prototype of a hybrid DEX architecture, designed to ex
 
 ## Live Profiles
 
-### Demo — Base Mainnet (Read-Only)
+### Base Mainnet (Read-Only, No Execution)
 
 https://ste-web-five.vercel.app
 
 - Browse markets
 - Live orderbook & recent trades
-- Balances & allowances (read-only)
+- Balances & allowances
 - Execution disabled to avoid mainnet risk
 
-### Dev — Ethereum Sepolia (Interactive)
+### Ethereum Sepolia (Interactive)
 
 https://ste-websepolia.vercel.app
 
@@ -42,7 +42,7 @@ https://ste-websepolia.vercel.app
 
 Short Loom demos explaining the full flow:
 
-1. Mainnet read-only tour
+1. Base Mainnet read-only tour
    - https://www.loom.com/share/8dfb8933950744c8b8878a5b0227465a
 2. Maker flow (place / approve / cancel)
    - https://www.loom.com/share/3bcea1ac76a546f1816d3c0ec638827a
@@ -90,47 +90,47 @@ Short Loom demos explaining the full flow:
 
 ## Quick Tour
 
-- **Maker (limit)** – place a limit order with tick controls and TIF/policies enforced.
-- **Taker (market)** – quote → (optional) approve → execute, with allowance and gas checks.
-- **Orderbook & Trades** – top-10 book with per-level timestamps, recent trades feed.
-- **My Orders (live)** – live lifecycle (placed/partial/filled/cancelled/expired).
-- **Balances & Allowances** – per-token balances + enable/custom/revoke.
-- **Status** – WS health badge, chain badge, account badge, and manual refresh.
-- **Metrics** – WS broadcasts/subscribers, tick loop p95, orders/quotes/fills/cancels.
+- **Maker (limit order)** – create limit orders with tick-level precision, enforcing TIF policies and execution constraints.
+- **Taker (market execution)** – request quote → (optional) approve → execute, with allowance validation and gas pre-checks.
+- **Orderbook & Trades** – real-time top-10 order book with per-level timestamps and recent trades stream.
+- **My Orders (live)** – real-time order lifecycle tracking (placed / partial / filled / cancelled / expired).
+- **Balances & Allowances** – per-token balances with granular allowance management (enable / custom / revoke).
+- **Status** – system health indicators (WebSocket, chain, account) with manual refresh controls.
+- **Metrics** – system-level metrics: WS broadcasts/subscribers, tick loop p95 latency, orders/quotes/fills/cancels.
 
 ---
 
 ## Environments & Profiles
 
-**Two deploys**:
+**Two deployments**:
 
-### Ethereum Sepolia (interactive)
+### Base Mainnet (Read-Only)
 
-- **RPC_URL / RPC_URL_READONLY:** Ethereum Sepolia
-- **markets.json:** Ethereum Sepolia token addresses
-- **0x addresses:** Ethereum Sepolia EP/targets
-- **Trading enabled** (approve/execute), for cheap real demos.
+- RPC_URL / RPC_URL_READONLY: Base Mainnet
+- markets.json: Mainnet token addresses
+- 0x addresses: Base Exchange Proxy / targets
+- Read-only mode: mutating endpoints and UI actions disabled to prevent on-chain execution.
 
-### Base Mainnet (read-only)
+### Ethereum Sepolia (Interactive)
 
-- **RPC_URL / RPC_URL_READONLY:** Base Mainnet
-- **markets.json:** Mainnet token addresses
-- **0x addresses:** Base mainnet EP/targets
-- **Read-only** (disable/guard mutating endpoints and buttons)
+- RPC_URL / RPC_URL_READONLY: Ethereum Sepolia
+- markets.json: Sepolia token addresses
+- 0x addresses: Sepolia Exchange Proxy / targets
+- Trading enabled (approve/execute) for low-cost, full end-to-end testing.
 
 ### Markets configuration
 
 - Markets are defined in JSON files (mainnet vs sepolia).
 - The active set is selected by the environment profile (CHAIN_ID / NEXT_PUBLIC_PROFILE).
 
-### FEES policy
+### Fee Policy
 
-- Demo fee (Sepolia Ethereum): 0.10% → 0xe02c543d4e8c89ab1f76b414fc3c75adc44cec2a (dev only)
-- Base Mainnet demo: 0% (read-only, no execution)
+- Sepolia (development environment): 0.10% → 0xe02c543d4e8c89ab1f76b414fc3c75adc44cec2a
+- Base Mainnet (read-only): 0% (no transaction execution)
 
 ---
 
-## Quickstart Demo (Read-only Base Mainnet)
+## Quickstart - Base Mainnet (Read-Only)
 
 ### Requirements
 
@@ -164,7 +164,7 @@ pnpm dev:stack:base
 
 Open: http://localhost:3000
 
-## Quickstart Demo (Interactive Sepolia)
+## Quickstart — Ethereum Sepolia (Interactive)
 
 ### 1. Copy env files
 
@@ -233,10 +233,10 @@ Then:
 
 ### Key metrics (examples used in the dashboard)
 
-- **WS Broadcasts rate (/s):** emissions to book rooms per second.
-- **WS Subscribers:** current subscribers across symbols.
-- **WS tick p95 (ms, 5m):** loop latency percentile.
-- **Orders/Quotes/Fills/Cancels:** both rate() and cumulative “totals”.
+- WS Broadcasts rate (/s): emissions to book rooms per second.
+- WS Subscribers: current subscribers across symbols.
+- WS tick p95 (ms, 5m): loop latency percentile.
+- Orders/Quotes/Fills/Cancels: both rate() and cumulative “totals”.
 
 ---
 
