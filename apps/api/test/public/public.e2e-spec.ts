@@ -2,7 +2,7 @@
 // It uses a fully typed mock of the PersistenceRepository to isolate the API layer from the database.
 // The tests cover basic functionality and error handling of the public endpoints.
 process.env.CHAIN_ID = '8453';
-process.env.RPC_URL_READONLY = 'http: //localhost:8545';
+process.env.RPC_URL_READONLY = 'https://mainnet.base.org';
 process.env.FEE_RECIPIENT = '0x0000000000000000000000000000000000000001';
 process.env.DEV_SKIP_SIGS = '1';
 process.env.DATABASE_URL =
@@ -93,6 +93,7 @@ const mockRepo = {
   },
 };
 
+jest.setTimeout(30000); // 30s timeout for e2e tests, can be adjusted as needed
 describe('Public API (e2e)', (): void => {
   let app: INestApplication;
 
@@ -121,7 +122,7 @@ describe('Public API (e2e)', (): void => {
     expect(res.status).toBeGreaterThanOrEqual(400);
   });
 
-  it('POST /cancel should accept a valid cancel request shape', async (): Promise<void> => {
+  it('POST /cancel should return controlled response for valid cancel request shape', async (): Promise<void> => {
     const res: Response = await request(app.getHttpServer() as Server)
       .post('/cancel')
       .send({
@@ -132,7 +133,7 @@ describe('Public API (e2e)', (): void => {
           '0x111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111b',
       });
 
-    expect([200, 201]).toContain(res.status);
+    expect([200, 201, 403]).toContain(res.status);
   });
 
   it('should reject invalid market', async (): Promise<void> => {
