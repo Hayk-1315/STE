@@ -101,6 +101,7 @@ export class OrderBookService {
     };
   }
 
+  // Debug helper for tests. Returns current in-memory ordebook state. Not optimized for performance, just for inspection.
   dump(symbolOrId: string): DumpBook {
     const key = symbolOrId.toUpperCase(); // we store by symbol like "WETH-USDC"
     const b = this.books.get(key);
@@ -566,5 +567,11 @@ export class OrderBookService {
       return { orderHash, status: 'cancelled' as const };
     }
     return { orderHash, status: 'not_found' as const };
+  }
+  /**
+   * Clears all in-memory order books. Useful for testing to ensure a clean state between tests.
+   */
+  clear(): void {
+    this.books.clear();
   }
 }
