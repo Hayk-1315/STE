@@ -19,7 +19,7 @@ export default function AccountBadge() {
 
   return (
     <div className="inline-flex items-center gap-2 rounded-full border border-neutral-700 bg-neutral-900/70 px-3 py-1 text-xs">
-      <span className="font-mono text-[11px]">{short(address)}</span>
+      <span className="font-mono text-[11px] text-neutral-300">{short(address)}</span>
       <span className="text-neutral-500 text-[11px]">({source ?? "wallet"})</span>
       <button
         className="text-[10px] uppercase tracking-wide text-neutral-400 hover:text-neutral-200"

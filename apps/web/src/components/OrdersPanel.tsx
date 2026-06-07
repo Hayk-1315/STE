@@ -61,7 +61,8 @@ export default function OrdersPanel() {
     setLoading(true);
 
     // 1) hidrata historial desde la API usando el status real
-    (async () => {
+    const hydrate = async (showSkeleton = false) => {
+      if (showSkeleton) setLoading(true);
       try {
         const res = await getOrders({ address, limit: 10 });
         if (cancelled) return;
@@ -79,15 +80,28 @@ export default function OrdersPanel() {
           };
         });
 
-        // seed del dedupe con lo que ya está en pantalla
+        // Reset dedupe to match the new authoritative state.
+        dedupe.clear();
         initial.forEach((e) => dedupe.add(keyOf(e)));
 
         // pinta directamente la hidratación (no usamos push en bucle)
         setEvents(initial);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && showSkeleton) setLoading(false);
       }
-    })();
+    };
+
+    // initial fetch shows the skeleton
+    void hydrate(true);
+
+    // Re-hydrate from the API whenever the page broadcasts ste:refresh
+    // (e.g. after a successful market/taker fill). Without this, OrdersPanel
+    // depends entirely on WebSocket order events, so any missed/delayed event
+    // leaves it permanently stale until the wallet reconnects.
+    const onRefresh = () => {
+      void hydrate(false);
+    };
+    window.addEventListener("ste:refresh", onRefresh);
 
     // 2) suscripción live (añade por delante, dedupe activo)
     const unsub = subscribeOrders(address as `0x${string}`, async (evt) => {
@@ -117,6 +131,7 @@ export default function OrdersPanel() {
 
     return () => {
       cancelled = true;
+      window.removeEventListener("ste:refresh", onRefresh);
       unsub();
     };
   }, [address]);
@@ -137,7 +152,7 @@ export default function OrdersPanel() {
   }
 
   return (
-    <Card className="bg-neutral-950 border-neutral-800/80 backdrop-blur">
+    <Card className="bg-neutral-950 border-neutral-700/60 backdrop-blur">
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="text-sm font-semibold tracking-wide text-neutral-100">

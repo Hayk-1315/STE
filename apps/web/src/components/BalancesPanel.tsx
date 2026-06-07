@@ -9,6 +9,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { erc20Balance, erc20Allowance } from "@/lib/erc20";
+import { displayAmount } from "@/lib/format";
 import { approveIfNeeded } from "@/lib/erc20";
 import { getZeroExDomainFallback } from "@/lib/zeroex";
 //import { env } from "@/lib/env"; // ⬅️ añadido
@@ -28,23 +29,11 @@ const isUnlimitedAllowance = (raw: bigint) => raw > BigInt(1) << BigInt(255);
 
 function fmtAllowanceLabel(raw: bigint, decimals: number): string {
   if (isUnlimitedAllowance(raw)) return "Unlimited";
-  const human = ethers.formatUnits(raw, decimals); // string
-  // Compacta para UI (no necesitamos precisión científica aquí)
-  const n = Number(human);
-  if (!Number.isFinite(n)) return human; // fallback
-  return new Intl.NumberFormat(undefined, {
-    notation: "compact",
-    maximumFractionDigits: 4,
-  }).format(n);
+  return displayAmount(ethers.formatUnits(raw, decimals), { compact: true, maxDecimals: 4 });
 }
 
 function fmtEth(raw: string): string {
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return raw;
-  return n.toLocaleString(undefined, {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 4,
-  });
+  return displayAmount(raw, { maxDecimals: 4 });
 }
 
 export default function BalancesPanel({ market }: Props) {
@@ -93,7 +82,7 @@ export default function BalancesPanel({ market }: Props) {
   }
 
   const load = React.useCallback(async () => {
-    if (!market) return;
+    if (!market || !address) return;
     const signer = await getSigner();
     const me = (await signer.getAddress()) as `0x${string}`;
     const provider = signer.provider!;
@@ -132,9 +121,13 @@ export default function BalancesPanel({ market }: Props) {
       },
       spender: spenderForAllow, // 🔹 guarda el spender usado
     });
-  }, [getSigner, market]);
+  }, [getSigner, market, address]);
 
   React.useEffect(() => {
+    if (!address) {
+      setChainId(null);
+      return;
+    }
     (async () => {
       try {
         const s = await getSigner();
@@ -144,7 +137,7 @@ export default function BalancesPanel({ market }: Props) {
         setChainId(null);
       }
     })();
-  }, [getSigner]);
+  }, [getSigner, address]);
 
   React.useEffect(() => {
     setData(null);
@@ -221,15 +214,17 @@ export default function BalancesPanel({ market }: Props) {
     const attach = async () => {
       if (!market || !address) return;
       const s = await getSigner();
+      if (disposed) return; // effect torn down before attach finished
       const provider = s.provider!;
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const onBlock = async (_bn: number) => {
-        if (pendingRef.current) return;
+        if (disposed || pendingRef.current) return;
         pendingRef.current = true;
         try {
           await load();
+        } catch {
+          // swallow — likely a transient post-disconnect race
         } finally {
-          // pequeño throttle (~300ms) para evitar spam
           setTimeout(() => {
             pendingRef.current = false;
           }, 300);
@@ -237,9 +232,7 @@ export default function BalancesPanel({ market }: Props) {
       };
       provider.on("block", onBlock);
       return () => {
-        if (!disposed) {
-          provider.off("block", onBlock);
-        }
+        provider.off("block", onBlock);
       };
     };
     let cleanup: (() => void) | undefined;
@@ -253,7 +246,7 @@ export default function BalancesPanel({ market }: Props) {
   }, [getSigner, address, market, load]);
 
   return (
-    <Card className="bg-neutral-950 border-neutral-800/80 backdrop-blur">
+    <Card className="bg-neutral-950 border-neutral-700/60 backdrop-blur">
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="text-sm font-semibold tracking-wide text-neutral-100">
@@ -285,7 +278,7 @@ export default function BalancesPanel({ market }: Props) {
             <div className="rounded-lg border border-neutral-800/70 bg-neutral-950/40 px-3 py-2 space-y-1">
               <div className="flex items-center justify-between text-xs text-neutral-400">
                 <span>ETH balance</span>
-                <span className="font-mono text-neutral-100">{fmtEth(data.eth)}</span>
+                <span className="font-mono text-neutral-200">{fmtEth(data.eth)}</span>
               </div>
             </div>
 
@@ -293,13 +286,13 @@ export default function BalancesPanel({ market }: Props) {
             <div className="rounded-lg border border-neutral-800/70 bg-neutral-950/40 px-3 py-2 space-y-2">
               <div className="flex items-center justify-between text-xs text-neutral-400">
                 <span>{market.base.symbol} balance</span>
-                <span className="font-mono text-neutral-100">{fmtEth(data.base.bal)}</span>
+                <span className="font-mono text-neutral-200">{fmtEth(data.base.bal)}</span>
               </div>
 
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <div className="text-[11px] text-neutral-500">Allowance</div>
-                  <div className="font-mono text-xs text-neutral-200">{fmtEth(data.base.alw)}</div>
+                  <div className="font-mono text-xs text-neutral-200">{data.base.alw}</div>
                 </div>
 
                 {data.spender && (
@@ -307,6 +300,7 @@ export default function BalancesPanel({ market }: Props) {
                     <Button
                       size="sm"
                       variant="outline"
+                      className="text-neutral-200"
                       onClick={() => {
                         if (readOnly) {
                           toast.message("Read-only mode");
@@ -326,6 +320,7 @@ export default function BalancesPanel({ market }: Props) {
                     <Button
                       size="sm"
                       variant="outline"
+                      className="text-neutral-200"
                       onClick={() => {
                         if (readOnly) {
                           toast.message("Read-only mode");
@@ -344,13 +339,13 @@ export default function BalancesPanel({ market }: Props) {
                     <Button
                       size="sm"
                       variant="outline"
-                      className="ml-2"
-                      disabled={isZeroDisplay(fmtEth(data.base.alw))}
+                      className="ml-2 text-neutral-200"
+                      disabled={isZeroDisplay(data.base.alw)}
                       onClick={() =>
                         doRevoke(market.base.address as `0x${string}`, market.base.symbol)
                       }
                       title={
-                        isZeroDisplay(fmtEth(data.base.alw))
+                        isZeroDisplay(data.base.alw)
                           ? "Allowance ya está en 0"
                           : "Revocar allowance"
                       }
@@ -366,13 +361,13 @@ export default function BalancesPanel({ market }: Props) {
             <div className="rounded-lg border border-neutral-800/70 bg-neutral-950/40 px-3 py-2 space-y-2">
               <div className="flex items-center justify-between text-xs text-neutral-400">
                 <span>{market.quote.symbol} balance</span>
-                <span className="font-mono text-neutral-100">{fmtEth(data.quote.bal)}</span>
+                <span className="font-mono text-neutral-200">{fmtEth(data.quote.bal)}</span>
               </div>
 
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <div className="text-[11px] text-neutral-500">Allowance</div>
-                  <div className="font-mono text-xs text-neutral-200">{fmtEth(data.quote.alw)}</div>
+                  <div className="font-mono text-xs text-neutral-200">{data.quote.alw}</div>
                 </div>
 
                 {data.spender && (
@@ -380,6 +375,7 @@ export default function BalancesPanel({ market }: Props) {
                     <Button
                       size="sm"
                       variant="outline"
+                      className="text-neutral-200"
                       onClick={() => {
                         if (readOnly) {
                           toast.message("Read-only mode");
@@ -398,6 +394,7 @@ export default function BalancesPanel({ market }: Props) {
                     <Button
                       size="sm"
                       variant="outline"
+                      className="text-neutral-200"
                       onClick={() => {
                         if (readOnly) {
                           toast.message("Read-only mode");
@@ -416,13 +413,13 @@ export default function BalancesPanel({ market }: Props) {
                     <Button
                       size="sm"
                       variant="outline"
-                      className="ml-2"
-                      disabled={isZeroDisplay(fmtEth(data.quote.alw))}
+                      className="ml-2 text-neutral-200"
+                      disabled={isZeroDisplay(data.quote.alw)}
                       onClick={() =>
                         doRevoke(market.quote.address as `0x${string}`, market.quote.symbol)
                       }
                       title={
-                        isZeroDisplay(fmtEth(data.quote.alw))
+                        isZeroDisplay(data.quote.alw)
                           ? "Allowance ya está en 0"
                           : "Revocar allowance"
                       }

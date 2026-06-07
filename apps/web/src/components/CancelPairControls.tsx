@@ -5,7 +5,7 @@ import React, { useMemo } from "react";
 import type { Market } from "@/lib/api";
 import { useWallet } from "@/providers/wallet";
 import { toast } from "sonner";
-import { postBuildCancelPairTx } from "@/lib/api";
+import { postBuildCancelPairTx, getOrders } from "@/lib/api";
 import { SALT_OFFSET, MINVALID_AFTER_LEGACY } from "@/lib/salt";
 import { cn } from "@/lib/cn";
 
@@ -28,41 +28,36 @@ export function CancelPairControls({
 
   if (!market) return null;
 
-  // --- añadido: pre-chequeo front-only para evitar abrir MM si no hay nada que cancelar ---
+  // Wallet-scoped pre-check: only proceed with the cancelPair tx (and the
+  // MetaMask popup) if the connected wallet actually has an open order in
+  // the current market. Fixes the Phase 5 regression where the previous
+  // implementation passed the connected wallet as `maker=` (the backend
+  // expects `address=`), so the request silently returned ANY order in the
+  // symbol regardless of owner; the orderbook fallback compounded the bug
+  // by treating "market has levels" as "wallet has cancellable orders".
+  //
+  // Behaviour:
+  //   - no address / no symbol → false (nothing to cancel).
+  //   - PLACED or PARTIALLY_FILLED row exists for this wallet+symbol → true.
+  //   - network / parse failure → false (fail closed; the user retries
+  //     instead of seeing a misleading MetaMask popup and a no-op cancel).
   async function hasCancelable(): Promise<boolean> {
     try {
-      const base = (process.env.NEXT_PUBLIC_API_BASE_URL as string) || "";
-      if (!base) return true; // si no tenemos base, no bloqueamos
+      if (!address) return false;
+      const symbol = market?.symbol;
+      if (!symbol) return false;
 
-      // 1) Si tu API expone /orders, comprueba si el maker tiene alguna PLACED en el símbolo
-      if (address) {
-        const u = `${base}/orders?maker=${address}&status=PLACED&symbol=${encodeURIComponent(
-          market?.symbol ?? "",
-        )}&limit=1`;
-        const r = await fetch(u, { cache: "no-store" });
-        if (r.ok) {
-          const j = await r.json();
-          if (Array.isArray(j?.items) && j.items.length > 0) return true;
-        }
-      }
-
-      // 2) Fallback: si el par está vacío en el libro, asumimos que no hay nada que cancelar
-      const u2 = `${base}/orderbook?symbol=${encodeURIComponent(
-        market?.symbol ?? "",
-      )}&depth=1&source=live`;
-      const r2 = await fetch(u2, { cache: "no-store" });
-      if (r2.ok) {
-        const j = await r2.json();
-        const nb = j?.l2?.bids?.length ?? 0;
-        const na = j?.l2?.asks?.length ?? 0;
-        return nb + na > 0;
-      }
+      const res = await getOrders({
+        address,
+        status: "PLACED,PARTIALLY_FILLED",
+        symbol,
+        limit: 1,
+      });
+      return Array.isArray(res?.items) && res.items.length > 0;
     } catch {
-      // en caso de error de red, no bloqueamos de forma agresiva
+      return false;
     }
-    return false;
   }
-  // --- fin añadido ---
 
   async function runCancelPair() {
     if (!market) return;

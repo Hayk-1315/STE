@@ -13,17 +13,14 @@ import {
   type OrderbookResponse,
 } from "@/lib/api";
 import { useOrderSigning } from "@/hooks/useOrderSigning";
-import TakerBox from "@/components/TakerBox"; // for quoting and taking orders
+import TradePanel, { type TradePanelHandle } from "@/components/TradePanel";
 import { subscribeBook, subscribeTrades } from "@/lib/ws"; // for live orderbook updates
 import OrdersPanel from "@/components/OrdersPanel";
-import { PlaceLimitButton } from "@/components/TakerBox";
+import IntentsPanel from "@/components/IntentsPanel";
 import { fmtPriceFromTicks, fmtSizeBase, fmtNotionalQuote } from "@/lib/format";
-import { validateLimitInput } from "@/lib/validation";
-//import LiveBadge from "@/components/LiveBadge";
 import LiveIndicator from "@/components/ui/LiveIndicator";
 import EmptyState from "@/components/ui/EmptyState";
 import { TableSkeleton, PanelSkeleton } from "@/components/ui/Skeleton";
-import { sanitizeDecimal } from "@/lib/number";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -32,27 +29,17 @@ import OrderbookTable from "@/components/OrderbookTable";
 import ChainBadge from "@/components/ChainBadge";
 import BalancesPanel from "@/components/BalancesPanel";
 import { marketSummary } from "@/lib/marketMath";
-import { ethers } from "ethers";
 import MarketHeader from "@/components/MarketHeader";
-import MakerHints from "@/components/MakerHints";
-// import AppFooter from "@/components/AppFooter";
-import Segmented from "@/components/ui/Segmented";
 import AccountBadge from "@/components/AccountBadge";
-//import ApiHealthBadge from "@/components/ApiHealthBadge";
 import { useWallet } from "@/providers/wallet";
-import { zeroExEP } from "@/lib/env";
-import { erc20Allowance, erc20Balance } from "@/lib/erc20";
-import { getZeroExDomainFallback } from "@/lib/zeroex";
-// import { env } from "@/lib/env";
 import MarketSwitcher from "@/components/MarketSwitcher";
 import { CancelPairControls } from "@/components/CancelPairControls";
-import { getFeeInfo } from "@/lib/fees";
-// import DemoModeBanner from "@/components/DemoModeBanner";
+import { ChevronDown } from "lucide-react";
 
 type TradeItem = { priceTicks: string; sizeBase: string; ts: string };
 
 export default function MarketPage() {
-  const { address, getSigner } = useWallet();
+  const { getSigner } = useWallet();
   const p = useParams<{ base: string; quote: string }>();
   const base = (Array.isArray(p.base) ? p.base[0] : p.base) ?? "";
   const quote = (Array.isArray(p.quote) ? p.quote[0] : p.quote) ?? "";
@@ -60,15 +47,7 @@ export default function MarketPage() {
   const tsMs = (x?: string) => (x ? Date.parse(x) || 0 : 0);
   const lastBookTsMsRef = React.useRef<number>(0);
 
-  // duration presets (seconds)
-  const EXPIRY_PRESETS = [
-    { label: "1m", secs: 1 * 60 },
-    { label: "30m", secs: 30 * 60 },
-    { label: "1h", secs: 60 * 60 },
-    { label: "6h", secs: 6 * 60 * 60 },
-    { label: "24h", secs: 24 * 60 * 60 },
-    { label: "3d", secs: 3 * 24 * 60 * 60 },
-  ] as const;
+  const tradePanelRef = React.useRef<TradePanelHandle | null>(null);
 
   const [market, setMarket] = useState<Market | null>(null);
   const [book, setBook] = useState<OrderbookResponse | null>(null);
@@ -80,19 +59,7 @@ export default function MarketPage() {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [refreshing, setRefreshing] = useState(false);
 
-  // maker state
-  const [makerSide, setMakerSide] = useState<"BUY" | "SELL">("SELL");
-  const [makerSize, setMakerSize] = useState<string>("0.10");
-  const [makerPrice, setMakerPrice] = useState<string>("1000");
-
-  const { placeLimit, cancelByHash } = useOrderSigning();
-
-  type ExpiryPreset = (typeof EXPIRY_PRESETS)[number]["secs"];
-  const [makerExpirySecs, setMakerExpirySecs] = useState<ExpiryPreset>(24 * 60 * 60);
-
-  // allowance state
-  const [makerAllowance, setMakerAllowance] = React.useState<bigint | null>(null);
-  const [checkingAllowance, setCheckingAllowance] = React.useState(false);
+  const { cancelByHash } = useOrderSigning();
 
   // cancel state
   const [cancelHash, setCancelHash] = useState("");
@@ -101,11 +68,6 @@ export default function MarketPage() {
 
   // per-level timestamp cache
   const levelTs = React.useRef<Map<string, string>>(new Map());
-
-  const ERC20_ABI = [
-    "function allowance(address owner, address spender) view returns (uint256)",
-    "function approve(address spender, uint256 value) returns (bool)",
-  ] as const;
 
   const rememberLevelsTs = React.useCallback(
     (side: "bids" | "asks", levels: Array<{ priceTicks: string; ts?: string }>) => {
@@ -121,26 +83,6 @@ export default function MarketPage() {
     (side: "bids" | "asks", priceTicks: string) => levelTs.current.get(`${side}:${priceTicks}`),
     [],
   );
-
-  const resolveAllowanceSpender = useCallback(async (): Promise<`0x${string}`> => {
-    const { verifyingContract } = await getZeroExDomainFallback();
-    const spender = verifyingContract as `0x${string}`;
-    return spender;
-  }, []);
-
-  // resolve spender once
-  const [spender, setSpender] = React.useState<`0x${string}` | null>(null);
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      const s = await resolveAllowanceSpender();
-      if (!alive) return;
-      setSpender(s);
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [resolveAllowanceSpender]);
 
   // initial load (markets → book → trades)
   useEffect(() => {
@@ -318,80 +260,9 @@ export default function MarketPage() {
     [],
   );
 
-  // place handler (UI-only messages updated to English)
-  // place handler (UI-only messages updated to English)
-  async function onPlace(opts?: { postOnly?: boolean }) {
-    if (!market) return;
-    setLoading(true);
-    setErr(null);
-    try {
-      const bDec = market.base.decimals;
-      const qDec = market.quote.decimals;
-
-      const baseWei = ethers.parseUnits(makerSize || "0", bDec);
-      const priceScaled = ethers.parseUnits(makerPrice || "0", qDec);
-      const denom = BigInt(10) ** BigInt(bDec);
-      const quoteWei = (baseWei * priceScaled) / denom;
-
-      const signer = await getSigner();
-      const me = await signer.getAddress();
-      const provider = signer.provider!;
-      const spenderResolved = spender ?? (await resolveAllowanceSpender());
-
-      let required: bigint = BigInt(0);
-      let token: `0x${string}`;
-      let label: string;
-
-      if (makerSide === "SELL") {
-        token = market.base.address as `0x${string}`;
-        required = baseWei;
-        label = market.base.symbol;
-      } else {
-        token = market.quote.address as `0x${string}`;
-        required = quoteWei;
-        label = market.quote.symbol;
-      }
-
-      if (required > BigInt(0)) {
-        const bal = await erc20Balance(provider, token, me as `0x${string}`);
-        if (bal < required) {
-          toast.error(`Insufficient ${label} balance for this order`);
-          setLoading(false);
-          return;
-        }
-        const alw = await erc20Allowance(provider, token, me as `0x${string}`, spenderResolved);
-        if (alw < required) {
-          toast.error(`Allowance too low for ${label}. Click “Enable” (approve) and try again.`);
-          setLoading(false);
-          return;
-        }
-      }
-
-      await placeLimit({
-        market,
-        side: makerSide,
-        // ⚠️ El parámetro tipado es sizeBaseHuman, NO "sizeHuman"
-        sizeBaseHuman: makerSize,
-        priceHuman: makerPrice,
-        expirySec: makerExpirySecs,
-        // ⬇️ NUEVO: propagamos el flag hacia el hook
-        postOnly: opts?.postOnly,
-      });
-
-      await reloadData();
-      // keep your normal place flow...
-      await reloadData();
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setErr(msg);
-      toast.error(
-        msg.includes("ACTION_REJECTED") || msg.includes("4001") ? "Signature rejected" : msg,
-        { duration: 4000 },
-      );
-    } finally {
-      setLoading(false);
-    }
-  }
+  // Phase 5 SEA UI gate (independent of readOnly): when enabled, render
+  // IntentsPanel. SEA actions inside the panel are disabled when readOnly.
+  const seaEnabled = useMemo(() => process.env.NEXT_PUBLIC_SEA_ENABLED === "true", []);
 
   async function onCancel() {
     if (!cancelHash || !market) return;
@@ -431,98 +302,14 @@ export default function MarketPage() {
     }
   }
 
-  const makerValidation = useMemo(
-    () => (market ? validateLimitInput(market, makerSize, makerPrice) : null),
-    [market, makerSize, makerPrice],
-  );
-  const tickHuman = useMemo(
-    () =>
-      market ? ethers.formatUnits(BigInt(market.rules.priceTickQ), market.quote.decimals) : "-",
-    [market],
-  );
-
-  const makerPayToken = React.useMemo(() => {
-    if (!market) return null;
-    return makerSide === "SELL" ? market.base : market.quote;
-  }, [market, makerSide]);
-
-  const requiredAmountWei = React.useMemo(() => {
-    if (!market) return BigInt(0);
-    const size = ethers.parseUnits(makerSize || "0", market.base.decimals);
-    if (makerSide === "SELL") {
-      return size;
-    }
-    const priceScaled = ethers.parseUnits(makerPrice || "0", market.quote.decimals);
-    const denom = BigInt(10) ** BigInt(market.base.decimals);
-    return (size * priceScaled) / denom;
-  }, [market, makerSide, makerSize, makerPrice]);
-
-  // initial allowance check (visible once)
-  React.useEffect(() => {
-    (async () => {
-      if (!market || !address || !makerPayToken || !spender) {
-        setMakerAllowance(null);
-        return;
-      }
-      try {
-        setCheckingAllowance(true);
-        const signer = await getSigner();
-        const erc20 = new ethers.Contract(makerPayToken.address, ERC20_ABI, signer);
-        const allowance: bigint = await erc20.allowance(address, spender);
-        setMakerAllowance(allowance);
-      } catch {
-        setMakerAllowance(null);
-      } finally {
-        setCheckingAllowance(false);
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [market?.id, makerPayToken?.address, address, spender]);
-
-  // silent allowance refresh each block
-  React.useEffect(() => {
-    let cleanup: (() => void) | undefined;
-    (async () => {
-      if (!market || !address || !makerPayToken || !spender) return;
-      const signer = await getSigner();
-      const p = signer.provider!;
-      const onBlock = async () => {
-        try {
-          const erc20 = new ethers.Contract(makerPayToken.address, ERC20_ABI, signer);
-          const allowance: bigint = await erc20.allowance(address, spender);
-          setMakerAllowance(allowance);
-        } catch {
-          /* noop */
-        }
-      };
-      p.on("block", onBlock);
-      cleanup = () => p.off("block", onBlock);
-    })();
-    return () => cleanup?.();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [market?.id, makerPayToken?.address, address, spender]);
-
-  async function onEnableMakerToken() {
-    if (!market || !makerPayToken) return;
-    const signer = await getSigner();
-    const erc20 = new ethers.Contract(makerPayToken.address, ERC20_ABI, signer);
-    const spend = spender ?? zeroExEP();
-    const tx = await erc20.approve(spend, ethers.MaxUint256);
-    toast.message(`Enabling ${makerPayToken.symbol}`, { description: tx.hash });
-    await tx.wait();
-    toast.success(`${makerPayToken.symbol} enabled`);
-    const next: bigint = await erc20.allowance(address, spend);
-    setMakerAllowance(next);
-  }
-
   return (
     <div className="p-6 space-y-6">
       {/* Header: 12-col grid avoids overlap and keeps controls on a single line */}
-      <div className="grid grid-cols-12 gap-4 items-start">
+      <div className="grid grid-cols-12 gap-4 items-start border-b border-neutral-800/80 pb-5">
         {/* Left: title + MarketHeader */}
         <div className="col-span-12 lg:col-span-7 min-w-0 space-y-2">
           <h1 className="text-xl font-semibold truncate">{title}</h1>
-          <div className="min-w-0">
+          <div className="min-w-0 space-y-2">
             <MarketHeader market={market} />
             <div className="shrink-0">
               <MarketSwitcher currentSymbol={symbol} />
@@ -531,9 +318,9 @@ export default function MarketPage() {
         </div>
 
         {/* Right: controls (no wrap; scroll if overflow) */}
-        <div className="col-span-12 lg:col-span-5">
+        <div className="col-span-12 lg:col-span-5 lg:mt-9">
           <div className="flex justify-end">
-            <div className="inline-flex flex-wrap items-center justify-end gap-3 rounded-2xl border border-neutral-800 bg-neutral-950/80 px-3 py-2 shadow-sm max-w-full">
+            <div className="inline-flex flex-wrap items-center justify-end gap-3 rounded-2xl border border-neutral-700/60 bg-neutral-950/80 px-3 py-2 shadow-sm max-w-full">
               <div className="flex items-center gap-2 border-r border-neutral-800 pr-3 mr-1">
                 <LiveIndicator status={live ? "connected" : "disconnected"} />
                 <ChainBadge />
@@ -570,265 +357,20 @@ export default function MarketPage() {
 
       {/* Main layout: single 12-col grid for all rows */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start">
-        {/* === Row 1: Maker + Taker (same width) === */}
-        <Card
-          className={`md:col-span-12 lg:col-span-6 h-full border border-neutral-800/80 bg-neutral-950/60 transition-colors ${
-            makerSide === "BUY"
-              ? "shadow-[0_0_18px_rgba(16,185,129,0.28)]"
-              : "shadow-[0_0_18px_rgba(244,63,94,0.28)]"
-          }`}
-        >
+        {/* === Row 1: unified Trade panel === */}
+        <Card className="md:col-span-12 lg:col-span-6 lg:col-start-4 h-full border border-neutral-800/80 bg-neutral-950/60">
           <CardHeader className="pb-3">
-            <CardTitle className="flex items-center justify-between text-sm font-semibold tracking-wide uppercase text-neutral-200">
-              <span>Maker</span>
-              <span
-                className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                  makerSide === "BUY"
-                    ? "bg-emerald-500/10 text-emerald-300 border border-emerald-500/40"
-                    : "bg-rose-500/10 text-rose-300 border border-rose-500/40"
-                }`}
-              >
-                {makerSide === "BUY" ? "Bid" : "Ask"}
-              </span>
+            <CardTitle className="text-sm font-semibold tracking-wide uppercase text-neutral-200">
+              Trade
             </CardTitle>
-            {/* Fee banner (concise line) */}
-            {(() => {
-              const { profile, bps, pct, recipientShort } = getFeeInfo();
-              return (
-                <p className="text-[11px] text-neutral-500">
-                  {bps > 0 && profile === "sepolia"
-                    ? `Demo fee ${pct}% to STE demo (${recipientShort})`
-                    : `Demo: 0% taker fee`}
-                </p>
-              );
-            })()}
           </CardHeader>
-
-          <CardContent className="space-y-3 text-sm text-neutral-200">
-            <Segmented
-              value={makerSide}
-              onChange={(v) => setMakerSide(v)}
-              options={[
-                { label: "BUY", value: "BUY" },
-                { label: "SELL", value: "SELL" },
-              ]}
-            />
-
-            {/* Size */}
-            <div className="space-y-1">
-              <label className="block text-xs font-medium text-neutral-400">
-                Size ({market?.base.symbol})
-              </label>
-              <Input
-                value={makerSize}
-                inputMode="decimal"
-                pattern="[0-9]*[.,]?[0-9]*"
-                placeholder="0.00"
-                className="mt-1 font-mono"
-                onChange={(e) =>
-                  setMakerSize(sanitizeDecimal(e.target.value, market?.base.decimals ?? 18, true))
-                }
-              />
-            </div>
-
-            {/* Price + expiry + ticks */}
-            <div className="space-y-2">
-              <label className="block text-xs font-medium text-neutral-400">
-                Price ({market?.quote.symbol})
-              </label>
-              <Input
-                value={makerPrice}
-                inputMode="decimal"
-                pattern="[0-9]*[.,]?[0-9]*"
-                placeholder="0.00"
-                className="mt-1 font-mono"
-                onChange={(e) =>
-                  setMakerPrice(sanitizeDecimal(e.target.value, market?.quote.decimals ?? 6, true))
-                }
-              />
-
-              <div className="space-y-1">
-                <label className="block text-xs font-medium text-neutral-400">Expires in</label>
-                <Segmented
-                  value={String(makerExpirySecs)}
-                  onChange={(v) => setMakerExpirySecs(Number(v) as ExpiryPreset)}
-                  options={EXPIRY_PRESETS.map((p) => ({ label: p.label, value: String(p.secs) }))}
-                />
-              </div>
-
-              {/* Tick controls */}
-              {/* <div className="flex flex-wrap items-center gap-2 pt-1">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="border-neutral-700 text-neutral-200 hover:bg-neutral-900"
-                  aria-label="decrease one tick"
-                  onClick={() => {
-                    if (!market) return;
-                    const qDec = market.quote.decimals;
-                    const tickQ = BigInt(market.rules.priceTickQ);
-                    const curScaled = ethers.parseUnits(makerPrice || "0", qDec);
-                    const curTicks = curScaled / (tickQ || BigInt(1));
-                    const nextScaled =
-                      (curTicks > BigInt(0) ? curTicks - BigInt(1) : BigInt(0)) *
-                      (tickQ || BigInt(1));
-                    setMakerPrice(ethers.formatUnits(nextScaled, qDec));
-                  }}
-                >
-                  −
-                </Button>
-
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="border-neutral-700 text-neutral-200 hover:bg-neutral-900"
-                  aria-label="increase one tick"
-                  onClick={() => {
-                    if (!market) return;
-                    const qDec = market.quote.decimals;
-                    const tickQ = BigInt(market.rules.priceTickQ);
-                    const curScaled = ethers.parseUnits(makerPrice || "0", qDec);
-                    const curTicks = curScaled / (tickQ || BigInt(1));
-                    const nextScaled = (curTicks + BigInt(1)) * (tickQ || BigInt(1));
-                    setMakerPrice(ethers.formatUnits(nextScaled, qDec));
-                  }}
-                >
-                  +
-                </Button>
-
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="border-neutral-700 text-neutral-200 hover:bg-neutral-900"
-                  aria-label="set to best book level"
-                  onClick={async () => {
-                    if (!market) return;
-                    const hasLocal =
-                      !!book && (book.bids?.length ?? 0) + (book.asks?.length ?? 0) > 0;
-
-                    const current = hasLocal
-                      ? book
-                      : await getOrderbook({ symbol, source: "live", depth: 10 }).catch(() => null);
-
-                    if (
-                      !current ||
-                      ((current.bids?.length ?? 0) === 0 && (current.asks?.length ?? 0) === 0)
-                    ) {
-                      toast.warning("No prices in the orderbook yet");
-                      return;
-                    }
-
-                    const bids = current.bids ?? [];
-                    const asks = current.asks ?? [];
-
-                    const bestBid =
-                      bids.length > 0
-                        ? bids.reduce(
-                            (acc, l) => (BigInt(l.priceTicks) > BigInt(acc.priceTicks) ? l : acc),
-                            bids[0],
-                          )
-                        : undefined;
-
-                    const bestAsk =
-                      asks.length > 0
-                        ? asks.reduce(
-                            (acc, l) => (BigInt(l.priceTicks) < BigInt(acc.priceTicks) ? l : acc),
-                            asks[0],
-                          )
-                        : undefined;
-
-                    const pick = makerSide === "SELL" ? (bestAsk ?? bestBid) : (bestBid ?? bestAsk);
-                    if (!pick) {
-                      toast.warning("No levels to set price");
-                      return;
-                    }
-
-                    const qDec = market.quote.decimals;
-                    const tickQ = BigInt(market.rules.priceTickQ);
-                    const scaled = BigInt(pick.priceTicks) * (tickQ || BigInt(1));
-                    setMakerPrice(ethers.formatUnits(scaled, qDec));
-                  }}
-                >
-                  set best
-                </Button>
-              </div>*/}
-            </div>
-
-            <PlaceLimitButton
-              market={market}
-              side={makerSide}
-              sizeHuman={makerSize}
-              priceHuman={makerPrice}
-              onPlace={async () => {
-                if (readOnly) {
-                  toast.message("Read-only mode on Base: trading disabled");
-                  return;
-                }
-                await onPlace();
-              }}
-            />
-            {market && makerValidation && (
-              <MakerHints market={market} makerValidation={makerValidation} tickHuman={tickHuman} />
-            )}
-
-            {address &&
-            market &&
-            makerPayToken &&
-            makerAllowance !== null &&
-            makerAllowance < requiredAmountWei ? (
-              <div className="flex items-center justify-between rounded border border-amber-500/40 bg-amber-500/5 p-2">
-                <div className="text-xs">
-                  <b>Enable {makerPayToken.symbol}</b>
-                  <div className="text-neutral-400">
-                    Allow the exchange to spend your {makerPayToken.symbol} so this order can be
-                    filled.
-                  </div>
-                </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={async () => {
-                    if (readOnly) {
-                      toast.message("Read-only mode");
-                      return;
-                    }
-                    void onEnableMakerToken();
-                  }}
-                  disabled={checkingAllowance}
-                >
-                  {checkingAllowance ? "Checking…" : `Enable ${makerPayToken.symbol}`}
-                </Button>
-              </div>
-            ) : null}
-          </CardContent>
-        </Card>
-
-        {/* Taker wrapper: same column span and height to visually match Maker */}
-        <Card className="md:col-span-12 lg:col-span-6 h-full">
-          <CardHeader>
-            <CardTitle>Taker</CardTitle>
-            {/* Small print (dynamic) */}
-            {(() => {
-              const { profile, bps, pct, recipientShort } = getFeeInfo();
-              return (
-                <p className="text-[11px] text-neutral-500">
-                  {bps > 0 && profile === "sepolia"
-                    ? `Demo fee ${pct}% to STE demo (${recipientShort})`
-                    : `Demo: 0% taker fee`}
-                </p>
-              );
-            })()}
-          </CardHeader>
-          <CardContent className="h-full">
-            <TakerBox market={market} />
+          <CardContent>
+            <TradePanel ref={tradePanelRef} market={market} />
           </CardContent>
         </Card>
 
         {/* === Row 2: Market summary (left) + Orderbook (center) + Recent trades (right) === */}
-        <Card className="md:col-span-12 lg:col-span-3 h-full min-h-[300px]">
+        <Card className="md:col-span-12 lg:col-span-3 lg:row-start-2 h-full min-h-[300px]">
           <CardHeader className="flex items-center justify-between pb-2">
             <CardTitle className="text-sm font-semibold tracking-wide text-neutral-100">
               Market summary
@@ -928,15 +470,11 @@ export default function MarketPage() {
                       side="bids"
                       levels={book.bids ?? []}
                       market={market}
-                      onTake={(l) => {
-                        window.dispatchEvent(
-                          new CustomEvent("ste:set-taker", {
-                            detail: {
-                              side: "SELL",
-                              sizeHuman: fmtSizeBase(l.sizeBase, market!.base.decimals),
-                            },
-                          }),
-                        );
+                      onPick={(l) => {
+                        tradePanelRef.current?.applyPick({
+                          side: "SELL",
+                          sizeHuman: fmtSizeBase(l.sizeBase, market!.base.decimals),
+                        });
                       }}
                       getLevelTs={getLevelTs}
                     />
@@ -954,15 +492,11 @@ export default function MarketPage() {
                       side="asks"
                       levels={book.asks ?? []}
                       market={market}
-                      onTake={(l) => {
-                        window.dispatchEvent(
-                          new CustomEvent("ste:set-taker", {
-                            detail: {
-                              side: "BUY",
-                              sizeHuman: fmtSizeBase(l.sizeBase, market!.base.decimals),
-                            },
-                          }),
-                        );
+                      onPick={(l) => {
+                        tradePanelRef.current?.applyPick({
+                          side: "BUY",
+                          sizeHuman: fmtSizeBase(l.sizeBase, market!.base.decimals),
+                        });
                       }}
                       getLevelTs={getLevelTs}
                     />
@@ -1036,13 +570,29 @@ export default function MarketPage() {
           </CardContent>
         </Card>
 
-        {/* === Row 3: Balances & Allowances + My Orders + Cancel (half-width, stacked) === */}
+        {/* === Row 3: Balances & Allowances + My Orders + Cancel (aligned to Orderbook width, stacked) === */}
         <div className="md:col-span-12 lg:col-span-6 lg:col-start-4 space-y-4">
           <BalancesPanel market={market} />
           <OrdersPanel />
+          {seaEnabled && (
+            <Card className="bg-neutral-950/80 border-neutral-800/80 backdrop-blur">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-semibold tracking-wide text-neutral-100">
+                  Smart intents
+                </CardTitle>
+                <p className="mt-1 text-xs text-neutral-500">
+                  Conditional intents you have created on this wallet. State updates via polling;
+                  manual wallet confirmation is required to execute.
+                </p>
+              </CardHeader>
+              <CardContent>
+                <IntentsPanel market={market} readOnly={readOnly} hideHeading />
+              </CardContent>
+            </Card>
+          )}
           <Card className="bg-neutral-950/80 border-neutral-800/80 backdrop-blur">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between gap-3">
+            <details className="group">
+              <summary className="flex cursor-pointer list-none items-start justify-between gap-3 [&::-webkit-details-marker]:hidden">
                 <div>
                   <CardTitle className="text-sm font-semibold tracking-wide text-neutral-100">
                     Cancel orders
@@ -1052,50 +602,53 @@ export default function MarketPage() {
                   </p>
                 </div>
 
-                {market && (
-                  <span className="hidden sm:inline-flex rounded-full border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[10px] font-mono uppercase tracking-wide text-rose-200">
-                    {market.base.symbol}/{market.quote.symbol}
-                  </span>
-                )}
-              </div>
-            </CardHeader>
+                <div className="flex items-center gap-2">
+                  {market && (
+                    <span className="hidden sm:inline-flex rounded-full border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[10px] font-mono uppercase tracking-wide text-rose-200">
+                      {market.base.symbol}/{market.quote.symbol}
+                    </span>
+                  )}
+                  <ChevronDown className="h-4 w-4 shrink-0 text-neutral-400 transition-transform [[open]_&]:rotate-180" />
+                </div>
+              </summary>
 
-            <CardContent className="space-y-4">
-              {/* 🔴 Cancel pair (scope-based) */}
-              <CancelPairControls market={market} className="justify-between" />
+              <CardContent className="space-y-4 mt-3">
+                {/* 🔴 Cancel pair (scope-based) */}
+                <CancelPairControls market={market} className="justify-between" />
 
-              {/* Separador fino */}
-              <div className="h-px bg-neutral-800/80" />
+                {/* Separador fino */}
+                <div className="h-px bg-neutral-800/80" />
 
-              {/* ⚪ Cancel by orderHash (lo que ya tenías) */}
-              <div className="space-y-2">
-                <p className="text-xs text-neutral-500">
-                  Cancel by <span className="font-mono">orderHash</span> (0x…).
-                </p>
+                {/* ⚪ Cancel by orderHash (lo que ya tenías) */}
+                <div className="space-y-2">
+                  <p className="text-xs text-neutral-500">
+                    Cancel by <span className="font-mono">orderHash</span> (0x…).
+                  </p>
 
-                <Input
-                  placeholder="0x..."
-                  value={cancelHash}
-                  onChange={(e) => setCancelHash(e.target.value)}
-                  className="my-2 font-mono text-xs bg-neutral-900/60 border-neutral-700/80 focus-visible:ring-1 focus-visible:ring-red-500/60 focus-visible:border-red-500/60"
-                />
+                  <Input
+                    placeholder="0x..."
+                    value={cancelHash}
+                    onChange={(e) => setCancelHash(e.target.value)}
+                    className="my-2 font-mono text-xs bg-neutral-900/60 border-neutral-700/80 focus-visible:ring-1 focus-visible:ring-red-500/60 focus-visible:border-red-500/60"
+                  />
 
-                <Button
-                  disabled={readOnly || !cancelHash || loading}
-                  onClick={() => {
-                    if (readOnly) {
-                      toast.message("Read-only mode");
-                      return;
-                    }
-                    void onCancel();
-                  }}
-                  className="w-full justify-center border-red-500/60 text-red-100 hover:bg-red-500/10 disabled:opacity-50 disabled:cursor-not-allowed"
-                  variant="outline"
-                >
-                  {loading ? "Sending..." : "Cancel order"}
-                </Button>
-              </div>
-            </CardContent>
+                  <Button
+                    disabled={readOnly || !cancelHash || loading}
+                    onClick={() => {
+                      if (readOnly) {
+                        toast.message("Read-only mode");
+                        return;
+                      }
+                      void onCancel();
+                    }}
+                    className="w-full justify-center border-red-500/60 text-red-100 hover:bg-red-500/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                    variant="outline"
+                  >
+                    {loading ? "Sending..." : "Cancel order"}
+                  </Button>
+                </div>
+              </CardContent>
+            </details>
           </Card>
         </div>
       </div>

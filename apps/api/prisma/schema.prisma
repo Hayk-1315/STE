@@ -63,6 +63,7 @@ model Market {
   trades        Trade[]
   events        OrderEvent[]
   snapshots     BookSnapshot[]
+  intents       Intent[]
 }
 
 model Order {
@@ -138,4 +139,160 @@ model BookSnapshot {
   ts        DateTime @default(now())
 
   @@index([marketId, ts])
+}
+
+// ----- SEA v1: Smart Execution Assistant -----
+// Phase 1 substrate: persistence + CRUD only. No monitor, no firing, no AI.
+// Columns reserved for later phases (linkedOrderHash, preparedQuote, cooldownUntilAt, etc.)
+// are nullable now to avoid post-Phase-1 schema churn.
+
+enum IntentType {
+  CONDITIONAL_LIMIT
+  CONDITIONAL_MARKET_READY
+}
+
+enum IntentStatus {
+  DRAFT
+  ACTIVE
+  TRIGGERED
+  READY
+  EXECUTING
+  PLACED
+  EXECUTED
+  CANCELLED
+  EXPIRED
+  REJECTED
+  FAILED
+}
+
+enum TriggerType {
+  PRICE_BELOW
+  PRICE_ABOVE
+}
+
+// MID is reserved but not supported in v1; the validator rejects it.
+enum ReferencePriceKind {
+  BEST_BID
+  BEST_ASK
+  MID
+}
+
+// DELEGATED_FUTURE is reserved for forward-compat; not implementable in v1.
+enum ExecutionAuthority {
+  USER_CONFIRMATION_REQUIRED
+  PRE_SIGNED_LIMIT_ORDER
+  DELEGATED_FUTURE
+}
+
+enum IntentEventType {
+  CREATED
+  ACTIVATED
+  TRIGGERED
+  READY
+  EXECUTING
+  PLACED
+  EXECUTED
+  CANCELLED
+  EXPIRED
+  REJECTED
+  FAILED
+  PROGRESS
+}
+
+model Intent {
+  id                  String              @id @default(cuid())
+  owner               String              @db.VarChar(42)
+  market              Market              @relation(fields: [marketId], references: [id])
+  marketId            String
+
+  type                IntentType
+  status              IntentStatus        @default(DRAFT)
+  side                OrderSide
+
+  // Atomic units, mirrors Order.sizeBase semantics.
+  sizeBase            Decimal             @db.Decimal(78, 0)
+  // CL only.
+  limitPriceTicks     BigInt?
+  // CMR only ("IOC" | "FOK").
+  tif                 String?
+
+  triggerType         TriggerType
+  triggerReference    ReferencePriceKind
+  triggerPriceTicks   BigInt
+
+  executionAuthority  ExecutionAuthority
+
+  // CL pre-signed 0x order payload. Verified at fire time in Phase 3.
+  preSignedOrderHash  String?
+  preSignedOrder      Json?
+  preSignedSignature  Bytes?
+  // Set when CL fires and an Order row is placed (Phase 3).
+  linkedOrderHash     String?
+
+  // CMR ready-state cache (Phase 4).
+  preparedQuote       Json?
+  preparedQuoteAt     DateTime?
+  cooldownUntilAt     DateTime?
+
+  // Phase 4.x-b: CMR execution-lifecycle tracking.
+  // `linkedTxHash` is stamped at READY → EXECUTING (or directly on the
+  // EXECUTED / FAILED fast-paths from the marker endpoint). Used by the
+  // FillWatcher reconciler in Phase 4.x-c to match an on-chain Trade row
+  // back to a CMR intent in O(1) via the index below, but ONLY together
+  // with `marketId === Trade.marketId` AND `owner === Trade.taker`.
+  // `walletLockUntilAt` is set by POST /sea/intents/:id/wallet-lock; the
+  // monitor's `tickCMRReady` skips READY → ACTIVE re-arm while this is in
+  // the future. Hard expiry (`expiresAt`) always wins over the lock.
+  linkedTxHash        String?   @db.VarChar(66)
+  walletLockUntilAt   DateTime?
+
+  // Original NL text and parser metadata (Phase 6).
+  rawText             String?
+  parsedJson          Json
+  parserMeta          Json?
+
+  expiresAt           DateTime
+  lastEvaluatedAt     DateTime?
+  failureReason       String?
+
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  events              IntentEvent[]
+
+  @@index([owner, status])
+  @@index([marketId, status])
+  @@index([status, expiresAt])
+  @@index([linkedOrderHash])
+  @@index([linkedTxHash])
+}
+
+model IntentEvent {
+  id        BigInt          @id @default(autoincrement())
+  intent    Intent          @relation(fields: [intentId], references: [id])
+  intentId  String
+  type      IntentEventType
+  payload   Json?
+  ts        DateTime        @default(now())
+
+  @@index([intentId, ts])
+}
+
+// Phase 3.x-b: highest observed `minValidSalt` per (maker, makerToken,
+// takerToken) triple, populated by CancelWatcherService when it sees a
+// `cancelPairLimitOrders(...)` call on the 0x Exchange Proxy. SEA's
+// IntentValidatorService queries this table at create + fire time to
+// reject pre-signed CL intents whose `salt` has been invalidated on-chain.
+// Composite PK bounds growth (one row per active maker/pair triple).
+model CancelPairFloor {
+  maker         String   @db.VarChar(42)
+  makerToken    String   @db.VarChar(42)
+  takerToken    String   @db.VarChar(42)
+  minValidSalt  Decimal  @db.Decimal(78, 0)
+  observedAt    DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  fromTxHash    String?  @db.VarChar(66)
+
+  @@id([maker, makerToken, takerToken])
+  @@index([maker])
 }

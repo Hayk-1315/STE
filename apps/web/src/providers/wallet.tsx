@@ -6,13 +6,10 @@
 
 import React, { createContext, useCallback, useContext, useRef, useState, useEffect } from "react";
 import { ethers, type Eip1193Provider, type TypedDataDomain, type TypedDataField } from "ethers";
-import { env, rpcUrl } from "@/lib/env";
+import { env } from "@/lib/env";
 
-// Web3Auth (modal)
-import { Web3Auth as Web3AuthModal, type Web3AuthOptions as ModalOptions } from "@web3auth/modal";
-import { OpenloginAdapter } from "@web3auth/openlogin-adapter";
-import { CHAIN_NAMESPACES, type SafeEventEmitterProvider } from "@web3auth/base";
-import { EthereumPrivateKeyProvider } from "@web3auth/ethereum-provider";
+// Web3Auth (PnP Web SDK v10 / MetaMask Embedded Wallets)
+import { Web3Auth, WEB3AUTH_NETWORK, type IProvider } from "@web3auth/modal";
 import { toast } from "sonner";
 
 type WalletState = {
@@ -30,6 +27,13 @@ type WalletState = {
     message: Record<string, unknown>;
   }) => Promise<string>;
   personalSign: (message: string) => Promise<string>;
+  /**
+   * Phase 5 bug-fix: arbitrary EIP-191 personal_sign over a UTF-8 message.
+   * Use this for canonical SEA messages (CMR ownerAuth, intent cancel auth)
+   * — the existing `personalSign(orderHash)` rejects non-hex inputs and is
+   * reserved for the ETHSIGN orderHash fallback in `useOrderSigning`.
+   */
+  personalSignMessage: (message: string) => Promise<string>;
   getSigner: () => Promise<ethers.Signer>;
 };
 
@@ -45,7 +49,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const [source, setSource] = useState<"injected" | "web3auth" | undefined>(undefined);
 
   const providerRef = useRef<ethers.BrowserProvider | null>(null);
-  const web3authRef = useRef<Web3AuthModal | null>(null);
+  const web3authRef = useRef<Web3Auth | null>(null);
 
   // <<< NUEVO: guardamos también el provider EIP-1193 “crudo” para escuchar eventos
   const eip1193Ref = useRef<Eip1193Provider | null>(null);
@@ -82,58 +86,29 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     if (!NEXT_PUBLIC_WEB3AUTH_CLIENT_ID) throw new Error("Web3Auth client id not configured.");
 
     if (!web3authRef.current) {
-      // 1) Private Key Provider para EVM con tu chain
-      const chainIdHex = `0x${Number(NEXT_PUBLIC_CHAIN_ID).toString(16)}`;
-      const privateKeyProvider = new EthereumPrivateKeyProvider({
-        config: {
-          chainConfig: {
-            chainNamespace: CHAIN_NAMESPACES.EIP155,
-            chainId: chainIdHex,
-            rpcTarget: rpcUrl(),
-            displayName: Number(NEXT_PUBLIC_CHAIN_ID) === 8453 ? "Base Mainnet" : "Base Sepolia",
-            ticker: "ETH",
-            tickerName: "Ether",
-          },
-        },
-      });
-
-      // 2) Modal + adapter (ambos con el provider)
-      const web3AuthNetwork =
-        (NEXT_PUBLIC_WEB3AUTH_NETWORK as "sapphire_mainnet" | "sapphire_devnet") ||
-        "sapphire_devnet";
-
-      const w3a = new Web3AuthModal({
+      // v10: chain config + login methods are managed in the Web3Auth dashboard.
+      // Network is the only piece still selected from env (devnet vs mainnet).
+      const w3a = new Web3Auth({
         clientId: NEXT_PUBLIC_WEB3AUTH_CLIENT_ID,
-        web3AuthNetwork, // ← AHORA usa la red desde env
-        privateKeyProvider,
-      } as ModalOptions);
-
-      const adapter = new OpenloginAdapter({
-        privateKeyProvider,
-        adapterSettings: { uxMode: "popup" },
+        web3AuthNetwork:
+          NEXT_PUBLIC_WEB3AUTH_NETWORK === "sapphire_mainnet"
+            ? WEB3AUTH_NETWORK.SAPPHIRE_MAINNET
+            : WEB3AUTH_NETWORK.SAPPHIRE_DEVNET,
       });
 
-      w3a.configureAdapter(adapter);
-      await w3a.initModal();
+      await w3a.init();
       web3authRef.current = w3a;
     }
 
-    const provider = (await web3authRef.current!.connect()) as SafeEventEmitterProvider | null;
+    const provider: IProvider | null = await web3authRef.current.connect();
     if (!provider) throw new Error("Web3Auth connect returned null provider");
 
-    // <<< NUEVO: guardamos también este provider como EIP-1193
     eip1193Ref.current = provider as unknown as Eip1193Provider;
-    // <<< FIN NUEVO
 
     providerRef.current = new ethers.BrowserProvider(provider as unknown as Eip1193Provider, "any");
     await hydrateFromProvider(providerRef.current);
     setSource("web3auth");
-  }, [
-    NEXT_PUBLIC_WEB3AUTH_CLIENT_ID,
-    NEXT_PUBLIC_CHAIN_ID,
-    NEXT_PUBLIC_WEB3AUTH_NETWORK,
-    hydrateFromProvider,
-  ]);
+  }, [NEXT_PUBLIC_WEB3AUTH_CLIENT_ID, NEXT_PUBLIC_WEB3AUTH_NETWORK, hydrateFromProvider]);
 
   // ---- Disconnect ----
   const disconnect = useCallback(async () => {
@@ -326,6 +301,50 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     [source, address, getSigner],
   );
 
+  /**
+   * Arbitrary EIP-191 personal_sign over a UTF-8 message (e.g. canonical SEA
+   * `SEA-CMR-INTENT|...` / `SEA-CANCEL-INTENT|...` strings). Distinct from
+   * `personalSign(orderHash)` above, which is dedicated to the ETHSIGN
+   * fallback path in `useOrderSigning` and rejects non-hex inputs.
+   *
+   * Injected path: encode to UTF-8 hex bytes so MetaMask/CBW receive a
+   * deterministic byte sequence (wallets render valid UTF-8 hex back as the
+   * underlying string in their prompt). Web3Auth / signer fallback: defer to
+   * ethers `signer.signMessage(string)`, which signs UTF-8 directly via
+   * EIP-191. Both paths produce the same signature byte-for-byte.
+   */
+  const personalSignMessage = useCallback(
+    async (message: string): Promise<string> => {
+      if (typeof message !== "string" || message.length === 0) {
+        throw new Error("personalSignMessage expects a non-empty string");
+      }
+
+      const injected = (window as unknown as { ethereum?: Eip1193Provider }).ethereum as
+        | (Eip1193Provider & {
+            request?: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
+          })
+        | undefined;
+
+      if (source === "injected" && injected?.request && address) {
+        // ethers v6: toUtf8Bytes → hexlify gives `0x<hex>` of the UTF-8 byte sequence.
+        const hexUtf8 = ethers.hexlify(ethers.toUtf8Bytes(message));
+        const sig = await injected.request({
+          method: "personal_sign",
+          params: [hexUtf8, address],
+        });
+        return sig as string;
+      }
+
+      // Web3Auth / fallback: ethers signMessage(string) hashes as UTF-8 under
+      // EIP-191 ("\x19Ethereum Signed Message:\n<len><utf8 bytes>"). Matches
+      // what MetaMask produces for the hex-utf8 path above.
+      const signer = await getSigner();
+      const sig = await signer.signMessage(message);
+      return sig as string;
+    },
+    [source, address, getSigner],
+  );
+
   const value: WalletState = {
     address,
     chainId,
@@ -336,6 +355,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     disconnect,
     signTypedData,
     personalSign,
+    personalSignMessage,
     getSigner,
   };
 

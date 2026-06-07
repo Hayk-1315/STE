@@ -1,4 +1,4 @@
-# STE — Full-Stack 0x-Based Hybrid DEX
+# Full-Stack 0x-Based Hybrid DEX
 
 End-to-end hybrid DEX architecture:
 
@@ -8,21 +8,26 @@ End-to-end hybrid DEX architecture:
 - On-chain settlement via 0x Exchange Proxy
 - WebSocket streams for order book, trades and orders
 - Event watchers for on-chain fills & cancels reconciliation
+- Smart Intents (SEA): conditional execution layer on top of the core engine
 - Prometheus metrics and Grafana dashboard
 
-This project is a serious prototype of a hybrid DEX architecture, designed to explore order matching, settlement flows and on-chain/off-chain coordination in decentralized trading systems. While not production-ready, it focuses on modeling realistic system behavior, key architectural decisions, and validated core flows through targeted automated testing rather than production hardening.
+This project is a serious prototype of a hybrid DEX architecture: off-chain matching with on-chain settlement, a unified trading surface (Market / Limit / Conditional), and an advanced conditional-execution layer (Smart Intents) built on top of the deterministic core. It models realistic system behavior and key architectural decisions, validated through targeted automated testing.
 
 ---
 
 ## Quick Tour
 
-- **Maker (limit order)** – create limit orders with tick-level precision, enforcing TIF policies and execution constraints.
-- **Taker (market execution)** – request quote (optional), approve, execute, with allowance validation and gas pre-checks.
-- **Orderbook & Trades** – real-time top-10 order book with per-level timestamps and recent trades stream.
-- **My Orders (live)** – real-time order lifecycle tracking (placed / partial / filled / cancelled / expired).
+- **Trading panel** – a single surface with Market, Limit, and Conditional modes, with quote, allowance, and gas/balance checks in one flow.
+- **Limit (maker)** – create limit orders with tick-level precision and rule validation, signed client-side (EIP-712) and placed off-chain; supports marketable-limit caps.
+- **Market (taker)** – request quote (optional), approve, execute through 0x, with allowance validation and gas pre-checks; fills reconciled via watchers.
+- **Smart Intents (SEA)** – conditional workflows: Conditional Limit (CL) places a pre-signed passive order when a trigger fires; Conditional Market Ready (CMR) arms a market execution when the trigger and full-size liquidity are met. Execution always requires manual wallet confirmation; the backend monitors and validates but never holds keys or settles autonomously.
+- **Orderbook & Trades** – real-time top-10 order book with per-level timestamps and a recent trades stream.
+- **Orders** – live order lifecycle (placed / partial / filled / cancelled / expired).
+- **Smart Intents panel** – active intents with a history view for terminal/placed rows.
 - **Balances & Allowances** – per-token balances with granular allowance management (enable / custom / revoke).
-- **Status** – system health indicators (WebSocket, chain, account) with manual refresh controls.
-- **Metrics** – system-level metrics: WS broadcasts/subscribers, tick loop p95 latency, orders/quotes/fills/cancels.
+- **Cancel orders** – advanced controls (pair-wide cancel and single order-hash cancel), collapsed by default.
+- **Profiles** – Base mainnet read-only demo and Ethereum Sepolia interactive.
+- **Metrics** – WS broadcasts/subscribers, tick loop p95 latency, orders/quotes/fills/cancels.
 
 ---
 
@@ -35,7 +40,7 @@ https://ste-web-five.vercel.app
 - Browse markets
 - Live orderbook & recent trades
 - Balances & allowances
-- Execution disabled to avoid mainnet risk
+- Write actions and watchers disabled; no on-chain execution from this profile
 
 ### Ethereum Sepolia (Interactive)
 
@@ -44,9 +49,9 @@ https://ste-websepolia.vercel.app
 - Connect wallet
 - Approve tokens
 - Place & cancel limit orders
-- Execute taker trades
-- Partial fills & sequential multifill
-- Live reconciliation via on-chain watchers
+- Execute taker trades, with partial fills & sequential multifill
+- Smart Intents (CL / CMR)
+- On-chain reconciliation via watchers
 
 ---
 
@@ -76,21 +81,20 @@ Short Loom demos explaining the full flow:
 │     (client-side)       │
 └───────────┬─────────────┘
           ▲ │ HTTP (REST) + WebSocket (real-time)
-          │ │ REST (markets, orderbook, trades, pricing)
+          │ │ REST (markets, orderbook, trades, quotes, intents)
           │ │ WS  (orderbook, orders, trades streams)
           │ ▼
 ┌─────────────────────────┐                        ┌───────────────────────────┐
 │  NestJS API (apps/api)  │         Prisma         │       DB (Postgres)       │
-│- order matching         │  ───────────────────►  │     - orders (raw + LOB)  │
-│  (in-memory LOB)        │  ◄───────────────────  │     - trades              │
-│- real-time data gateway │                        │     - events              │
-│  (WebSocket)            │                        └───────────────────────────┘
-│- fees + trading         │
-│  constraints            │
-│- metrics, logs          │
-│  & monitoring           │
+│- order matching         │  ───────────────────►  │   - orders (raw + LOB)    │
+│  (in-memory LOB)        │  ◄───────────────────  │   - trades / events       │
+│- real-time gateway (WS) │                        │   - smart intents         │
+│- SEA monitor            │                        └───────────────────────────┘
+│  (CL / CMR triggers)    │
+│- fees + constraints     │
+│- metrics & monitoring   │
 │- background jobs        │
-│ (ticks, reconciliation )│
+│ (ticks, reconciliation) │
 └───────────┬─────────────┘
             │ JSON-RPC (read-only)
             │ watchers: fills / cancels reconciliation
@@ -103,100 +107,56 @@ Short Loom demos explaining the full flow:
 
 > Note: transactions are sent directly from the
 user wallet to the 0x Exchange Proxy (not via backend)
-
 ```
 
 ### How it works
 
 - **Client (Next.js)** signs orders locally using EIP-712 and interacts with the backend via REST and WebSocket.
-- **REST API** is used for fetching data such as markets, orderbook snapshots, trades, and balances.
+- **REST API** serves markets, orderbook snapshots, trades, quotes, balances, and Smart Intents.
 - **WebSocket layer** streams real-time updates for orderbook, trades, and user orders.
-- **API (NestJS)** performs off-chain order matching using an in-memory order book (LOB) and enforces trading rules.
-- **Postgres** persists orders (raw + derived state), trades, and events for recovery, reconciliation, and analytics.
-- **0x Exchange Proxy** is used strictly for on-chain settlement, including fills and cancels.
+- **API (NestJS)** performs off-chain matching using an in-memory order book (LOB) and enforces trading rules.
+- **SEA monitor** evaluates Smart Intent triggers and readiness (CL / CMR) without holding keys or settling autonomously.
+- **Postgres** persists orders (raw + derived state), trades, events, and intents for recovery and reconciliation.
+- **0x Exchange Proxy** is used strictly for on-chain settlement (fills and cancels).
 - **Watchers (JSON-RPC)** listen to on-chain events and reconcile backend state with blockchain activity.
 
 ---
 
 ## Execution Flow (End-to-End)
 
-This section describes how an order flows through the system, from creation to on-chain settlement and reconciliation.
+### A. Limit / Market
 
-1. **Maker signs order (EIP-712)**
-   - User creates a limit order
-   - Order is signed client-side using EIP-712
+1. **Maker signs order (EIP-712)** – user creates a limit order, signed client-side.
+2. **Order stored off-chain** – API validates (price, size, expiry); stored in DB + in-memory orderbook.
+3. **Orderbook broadcast (WebSocket)** – top-of-book snapshots streamed per market.
+4. **Matching / quote** – taker requests a quote (REST); matching selects best available orders.
+5. **Pre-trade validation** – balance, allowance (ERC20 approve), gas estimation.
+6. **On-chain settlement via 0x** – transaction built for the 0x Exchange Proxy; user signs and sends.
+7. **Execution** – order filled or partially filled; state changes emitted as events.
+8. **Watcher reconciliation** – backend reconciles fills/cancels and rehydrates the orderbook.
+9. **Client updates (WebSocket)** – book, trades, and user orders update in real-time.
 
-2. **Order stored off-chain**
-   - API validates order (price, size, expiry)
-   - Stored in DB + in-memory orderbook
+### B. Smart Intents (SEA)
 
-3. **Orderbook broadcast (WebSocket)**
-   - Top-of-book snapshots streamed in real-time
-   - Clients subscribe per market
-
-4. **Matching / Quote request**
-   - Taker requests a quote (REST)
-   - Matching logic selects best available orders
-
-5. **Pre-trade validation**
-   - Balance check
-   - Allowance check (ERC20 approve)
-   - Gas estimation
-
-6. **On-chain settlement via 0x**
-   - Transaction built using 0x Exchange Proxy
-   - User signs and sends transaction
-
-7. **On-chain execution**
-   - Order is filled or partially filled
-   - State changes emitted as events
-
-8. **Watcher reconciliation**
-   - Backend listens to fills/cancels
-   - Updates DB and rehydrates orderbook
-
-9. **Client updates (WebSocket)**
-   - Book, trades, and user orders updated in real-time
+- **Conditional Limit (CL)** – the user pre-signs a passive 0x limit order; the backend validates and stores the intent; the monitor watches the trigger; when it fires and the order can still rest safely, the signed order is placed into the normal orderbook. Once placed, the underlying Order is managed through the normal Orders flow.
+- **Conditional Market Ready (CMR)** – the backend monitors trigger and liquidity; READY requires the full requested size to be fillable at or better than the trigger; the user manually executes; a wallet-lock / execution token protects the execution window; the intent moves EXECUTING → EXECUTED or FAILED via watcher/sweeper reconciliation.
 
 ---
 
 ## Design Decisions
 
-- **Off-chain orderbook**
-  → Orders are stored and matched off-chain to achieve low latency and avoid gas costs for every interaction.  
-  → Enables real-time trading UX similar to centralized exchanges.
-
-- **0x Exchange Proxy for settlement**
-  → On-chain execution is delegated to 0x for standardized, battle-tested settlement.  
-  → Ensures secure signature validation and token transfers without custom smart contracts.
-
-- **Client-side EIP-712 signing**
-  → Orders are signed in the frontend using the user’s wallet.  
-  → The backend never holds private keys, improving security and trust assumptions.
-
-- **In-memory matching engine (LOB)**
-  → Order matching is performed in-memory for speed and deterministic execution.  
-  → The database is used for persistence, not for matching logic.
-
-- **WebSocket-first real-time layer**
-  → Orderbook, trades, and user orders are streamed via WebSocket.  
-  → Avoids polling and provides a responsive trading experience.
-
-- **Event-driven reconciliation (watchers)**
-  → Backend listens to on-chain fills and cancels via JSON-RPC.  
-  → Keeps off-chain state eventually consistent with blockchain state.
-
-- **Separation of execution and state**
-  → Execution happens on-chain (0x), while state and UX live off-chain.  
-  → This hybrid model balances decentralization with performance.
-
-- **Multi-network support (Base mainnet / Sepolia)**
-  → Mainnet can be used in read-only mode for safe exploration.  
-  → Sepolia is used for testing full execution flows without real funds.
-
-- **Single-node architecture (v1)**
-  → Matching engine, API, and WebSocket gateway run in a single service.  
-  → Keeps the system simple while remaining extensible for future scaling.
+- **Off-chain orderbook** – orders are matched off-chain for low latency and a CEX-like UX; the database persists state, it does not match.
+- **0x Exchange Proxy for settlement** – on-chain execution uses standardized, battle-tested settlement; no custom settlement contracts.
+- **Client-side EIP-712 signing** – orders are signed in the user's wallet; the backend never signs EIP-712 and never holds private keys.
+- **User-confirmed execution** – every on-chain action requires an explicit wallet confirmation; there is no autonomous settlement.
+- **Smart Intents are monitored workflows, not custody** – the SEA monitor evaluates triggers/readiness deterministically; it does not delegate keys or auto-execute.
+- **CMR uses fixed FOK in the UI** – CMR v1 means full requested size or no execution start.
+- **PLACED Smart Intents are UI-history** – once a CL is placed, the underlying normal Order takes over and is managed in the Orders panel.
+- **In-memory matching engine (LOB)** – matching is in-memory for speed and deterministic execution.
+- **WebSocket-first real-time layer** – orderbook, trades, and user orders are streamed, not polled.
+- **Event-driven reconciliation (watchers)** – backend reconciles on-chain fills/cancels via JSON-RPC.
+- **Multi-network profiles** – Base mainnet is a read-only demo; Sepolia exercises full execution.
+- **Single-node architecture (v1)** – matching engine, API, and WebSocket gateway run in one service.
 
 ---
 
@@ -204,38 +164,41 @@ This section describes how an order flows through the system, from creation to o
 
 - Matching engine runs in a single node (no horizontal scaling yet)
 - No on-chain orderbook (off-chain trust assumptions)
-- No MEV protection or advanced execution strategies
+- RPC quota and watcher health affect live QA and reconciliation
+- No production hardening; no MEV protection or advanced execution strategies
 - Simplified risk and margin model (spot-only)
 
 ---
 
 ## Environments & Profiles
 
-**Two deployments**:
+**Two profiles**, selected by environment:
 
 ### Base Mainnet (Read-Only)
 
-- RPC_URL / RPC_URL_READONLY: Base Mainnet
+- RPC vars: Base Mainnet
 - markets.json: Mainnet token addresses
 - 0x addresses: Base Exchange Proxy / targets
-- Read-only mode: mutating endpoints and UI actions disabled to prevent on-chain execution.
+- `READ_ONLY=true`, `PROFILE=mainnet`: mutating endpoints, UI write actions, and watchers disabled
 
 ### Ethereum Sepolia (Interactive)
 
-- RPC_URL / RPC_URL_READONLY: Ethereum Sepolia
+- RPC vars: Ethereum Sepolia
 - markets.json: Sepolia token addresses
 - 0x addresses: Sepolia Exchange Proxy / targets
-- Trading enabled (approve/execute) for low-cost, full end-to-end testing.
+- Trading enabled (approve / execute) and Smart Intents (CL / CMR) when SEA flags are configured
 
 ### Markets configuration
 
 - Markets are defined in JSON files (mainnet vs sepolia).
-- The active set is selected by the environment profile (CHAIN_ID / NEXT_PUBLIC_PROFILE).
+- The active set is selected by the environment profile (`CHAIN_ID` / `NEXT_PUBLIC_PROFILE`).
 
 ### Fee Policy
 
-- Sepolia (development environment): 0.10% → 0xe02c543d4e8c89ab1f76b414fc3c75adc44cec2a
-- Base Mainnet (read-only): 0% (no transaction execution)
+- Sepolia: taker fee is env-configured (recipient set via environment).
+- Base Mainnet (read-only): no transaction execution.
+
+> Configure profiles through environment variables such as `READ_ONLY`, `PROFILE` / `NEXT_PUBLIC_PROFILE`, `CHAIN_ID`, RPC URLs, and SEA flags. Do not commit secrets.
 
 ---
 
@@ -246,7 +209,6 @@ This section describes how an order flows through the system, from creation to o
 - Node 22
 - pnpm
 - Docker Desktop (for Postgres)
-- Concurrently (already in repo deps)
 
 ### 1. Install dependencies
 
@@ -288,27 +250,35 @@ pnpm dev:stack:sepolia
 
 Open: http://localhost:3000
 
+> Per-process launchers are also available: `pnpm dev:api:sepolia`, `pnpm dev:web:sepolia`, `pnpm dev:api:mainnet`, `pnpm dev:web:mainnet`.
+
 ---
 
 ## Testing
 
-The project includes a focused automated test suite covering the most critical exchange flows and engine behavior.
+The project includes a focused automated test suite covering the critical exchange flows and engine behavior.
 
-Current coverage includes:
+Coverage includes:
 
 - Order placement and validation rules
 - Quote generation and matching logic
 - Full and partial fills
-- Order cancellation flows
-- Reconciliation paths for simulated on-chain settlement
-- Core public API endpoints
-- Invalid request and edge-case handling
+- Order cancellation and pair-cancel flows
+- Raw order / signature persistence regression
+- Smart Intent (SEA) validation and CMR lifecycle pieces
+- On-chain watcher reconciliation paths (where applicable)
+- Core public API endpoints and edge-case handling
 
-Tests were designed to validate the exchange’s functional core rather than maximize superficial coverage metrics.
+Run the tests:
 
-**Current status:** 21 passing automated tests.
+```bash
+pnpm --filter api test        # backend (jest)
+pnpm --filter web typecheck   # frontend types
+pnpm --filter web lint        # frontend lint
+pnpm --filter web build       # frontend build
+```
 
-This approach prioritizes confidence in the matching engine, order lifecycle, and API behavior while keeping the codebase lean and iteration-friendly at prototype stage.
+Tests validate the functional core rather than maximize superficial coverage metrics.
 
 ---
 
@@ -367,7 +337,20 @@ Then:
 - WS Broadcasts rate (/s): emissions to book rooms per second.
 - WS Subscribers: current subscribers across symbols.
 - WS tick p95 (ms, 5m): loop latency percentile.
-- Orders/Quotes/Fills/Cancels: both rate() and cumulative “totals”.
+- Orders/Quotes/Fills/Cancels: both rate() and cumulative "totals".
+
+---
+
+## Planned: AI/NL Intent Assistant
+
+A natural-language layer on top of the deterministic engine is planned, not implemented. The intended behavior:
+
+- The user types a natural-language intent.
+- The assistant proposes a structured CL or CMR draft.
+- The user reviews and edits the draft before anything is created.
+- Backend validation remains the source of truth.
+
+It will not auto-execute, auto-sign, or take custody, and it is not investment advice.
 
 ---
 

@@ -9,6 +9,13 @@ import {
   EventType,
 } from '@prisma/client';
 import type { LimitOrder, Signature } from '../zeroex/limit-order.types';
+import {
+  normalizeOrderForJson,
+  packedBytesToTuple,
+  signatureToTuple,
+  tupleToPackedBytes,
+  type ZeroExSigTuple,
+} from './raw-order.util';
 import { metrics } from '../infra/metrics';
 
 type MarketBasic = {
@@ -338,7 +345,21 @@ export class PersistenceRepository {
     taker: string,
     priceTicks: bigint,
     sizeBase: bigint,
+    // Phase 4.x-a: optional on-chain tx hash. FillWatcher passes the source
+    // transaction hash so SEA reconciliation (Phase 4.x-c) can match a Trade
+    // to its CMR intent in O(1) via Trade.txHash. Existing callers
+    // (OrderBookService.market, EngineController dev path) omit it and the
+    // column stays NULL — keeps the dev/no-watcher behaviour byte-identical.
+    txHash?: string,
   ) {
+    // Normalise to lowercase only when a well-formed 0x66-char value is
+    // supplied; anything else (empty string, malformed) collapses to
+    // undefined so Prisma writes NULL rather than a junk value.
+    const txHashNorm =
+      typeof txHash === 'string' && /^0x[0-9a-fA-F]{64}$/.test(txHash)
+        ? txHash.toLowerCase()
+        : undefined;
+
     const row = await this.prisma.trade.create({
       data: {
         marketId,
@@ -346,6 +367,7 @@ export class PersistenceRepository {
         taker: taker.toLowerCase(),
         priceTicks,
         sizeBase: this.D(sizeBase),
+        ...(txHashNorm ? { txHash: txHashNorm } : {}),
       },
       select: {
         market: { select: { symbol: true } },
@@ -363,6 +385,45 @@ export class PersistenceRepository {
       sizeBase: sizeBase.toString(),
       ts: new Date().toISOString(), // 👈 usamos "ahora" como timestamp del trade
     });
+  }
+
+  /**
+   * Phase 4.x-b ownership-bound trade lookup.
+   *
+   * Returns a Trade row ONLY when ALL THREE constraints hold:
+   *   - `trade.txHash    === txHash.toLowerCase()`
+   *   - `trade.marketId  === marketId`
+   *   - `trade.taker     === owner.toLowerCase()`
+   *
+   * Consumed by `IntentService.markExecuting`'s fast-path A. The single
+   * WHERE clause prevents a foreign txHash, a cross-market hash, or a
+   * wrong-taker hash from driving a `READY → EXECUTED` transition (only
+   * the intent owner's own taker fill against the matched market may
+   * shortcut to EXECUTED).
+   */
+  async findTradeByTxHashForIntent(p: {
+    txHash: string;
+    marketId: string;
+    owner: string;
+  }): Promise<{
+    id: bigint;
+    makerOrderHash: string;
+    sizeBase: string;
+  } | null> {
+    const row = await this.prisma.trade.findFirst({
+      where: {
+        txHash: p.txHash.toLowerCase(),
+        marketId: p.marketId,
+        taker: p.owner.toLowerCase(),
+      },
+      select: { id: true, makerOrderHash: true, sizeBase: true },
+    });
+    if (!row) return null;
+    return {
+      id: row.id,
+      makerOrderHash: row.makerOrderHash,
+      sizeBase: row.sizeBase.toString(),
+    };
   }
 
   async decreaseOrderRemaining(
@@ -444,53 +505,67 @@ export class PersistenceRepository {
    * Minimal raw fetch for quote → build txData.
    * Returns zeroExOrder + signature for a given orderHash (typed).
    */
-  // al final de la clase PersistenceRepository, antes de findRawOrderByHash o junto a él
+  /**
+   * Phase 5 P0 fix: persist raw order JSON + signature for a placed Order.
+   *
+   * Inputs are strictly validated and normalised:
+   * - `signature` accepts a tuple `{signatureType, v, r, s}` OR a 65-byte
+   *   0x hex string. Anything else throws — `attachRawToOrder` is now
+   *   load-bearing; callers must roll back placement on failure.
+   * - `order` may contain bigint primitives in numeric fields (the
+   *   IntentFire path produces these); `normalizeOrderForJson` rewrites
+   *   them as decimal strings so Prisma's JSON column accepts the value.
+   *
+   * Signature is packed into 66 bytes `[signatureType:1][r:32][s:32][v:1]`
+   * so the on-chain `signatureType` discriminator (EIP712 vs ETHSIGN)
+   * round-trips through `findRawOrderByHash` to the tx builder.
+   */
   async attachRawToOrder(params: {
     orderHash: string;
-    order: LimitOrder;
-    signature?: Signature | `0x${string}`;
+    order: LimitOrder | Record<string, unknown>;
+    // Accepts a {signatureType,v,r,s} tuple OR a 65-byte 0x hex string; any
+    // other shape is rejected at runtime by signatureToTuple (validation
+    // unchanged). Typed `unknown` because the prior union collapsed to unknown.
+    signature: unknown;
   }) {
-    const { orderHash, order, signature } = params;
+    const tuple: ZeroExSigTuple | undefined = signatureToTuple(
+      params.signature,
+    );
+    if (!tuple) {
+      throw new Error(
+        'attachRawToOrder: signature must be a 65-byte 0x hex string OR a valid (signatureType, v, r, s) tuple with signatureType in {2,3}',
+      );
+    }
+    const sigBuf = tupleToPackedBytes(tuple);
 
-    // expiry en BD es bigint: normalizamos desde number/string/bigint
-    const expRaw = (order as unknown as { expiry?: unknown })?.expiry;
-    const expiryBig =
-      typeof expRaw === 'number'
-        ? BigInt(expRaw)
-        : typeof expRaw === 'string'
-          ? BigInt(expRaw)
-          : typeof expRaw === 'bigint'
-            ? expRaw
-            : 0n;
-
-    // salt como string (columna existente)
-    const saltRaw = (order as unknown as { salt?: unknown })?.salt;
-    const saltStr =
-      typeof saltRaw === 'string'
-        ? saltRaw
-        : typeof saltRaw === 'number'
-          ? String(saltRaw)
-          : typeof saltRaw === 'bigint'
-            ? saltRaw.toString()
-            : '';
-
-    // signature → bytes si es hex; si no, la dejamos vacía (para cancel no es necesaria)
-    const sigBuf =
-      typeof signature === 'string' && signature.startsWith('0x')
-        ? Buffer.from(signature.slice(2), 'hex')
-        : Buffer.alloc(0);
+    const normalizedOrder = normalizeOrderForJson(params.order);
+    const expiryBig = BigInt(Number(normalizedOrder.expiry));
+    const saltStr = String(normalizedOrder.salt);
 
     await this.prisma.order.update({
-      where: { orderHash },
+      where: { orderHash: params.orderHash },
       data: {
-        zeroExOrder: order as unknown as Prisma.InputJsonValue,
-        signature: sigBuf,
+        zeroExOrder: normalizedOrder as unknown as Prisma.InputJsonValue,
+        // Prisma's generated Bytes type narrows to `Uint8Array<ArrayBuffer>`;
+        // our utility returns a fresh-allocated Uint8Array but TypeScript
+        // sees `ArrayBufferLike`. The cast is safe at runtime because we
+        // allocated over a non-shared ArrayBuffer in tupleToPackedBytes.
+        signature: sigBuf as unknown as Uint8Array<ArrayBuffer>,
         expiry: expiryBig,
         salt: saltStr,
       },
     });
   }
 
+  /**
+   * Returns a parsed (signatureType, v, r, s) tuple — directly consumable by
+   * `ZeroExTxBuildersService.buildFillLimitOrder`.
+   *
+   * Legacy rows that pre-date the Phase 5 P0 fix (0-byte or 65-byte
+   * `Order.signature` buffers) intentionally return `signature: null` so
+   * /match/quote falls through to the existing `missing_raw` branch instead
+   * of producing a malformed fill tx that would revert on-chain.
+   */
   async findRawOrderByHash(
     orderHash: string,
   ): Promise<{ zeroExOrder: LimitOrder | null; signature: Signature | null }> {
@@ -499,23 +574,13 @@ export class PersistenceRepository {
       select: { zeroExOrder: true, signature: true },
     });
 
-    // Trata null/undefined como ausencia de orden; si hay valor, típalo como LimitOrder
     const raw = row?.zeroExOrder as unknown;
     const zeroExOrder: LimitOrder | null =
       raw == null ? null : (raw as LimitOrder);
 
-    // signature puede ser Buffer/Uint8Array o string (según el schema/client)
-    let signature: Signature | null = null;
-    const s = row?.signature as unknown;
-
-    if (typeof s === 'string') {
-      const hex = s.startsWith('0x') ? (s as `0x${string}`) : `0x${s}`;
-      signature = hex as unknown as Signature;
-    } else if (s && typeof (s as { length: number }).length === 'number') {
-      // Buffer o Uint8Array
-      const hex = this.bytesToHex(s as Uint8Array);
-      signature = hex as unknown as Signature;
-    }
+    const sigBuf = row?.signature as Buffer | Uint8Array | null | undefined;
+    const tuple = packedBytesToTuple(sigBuf);
+    const signature = tuple ? (tuple as unknown as Signature) : null;
 
     return { zeroExOrder, signature };
   }

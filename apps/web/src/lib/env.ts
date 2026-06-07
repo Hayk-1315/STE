@@ -16,12 +16,20 @@ const schema = z.object({
     .transform((s) => (s ? new URL(s).toString() : undefined)),
   NEXT_PUBLIC_ZEROEX_EXCHANGE_PROXY: z.string().regex(/^0x[0-9a-fA-F]{40}$/, "Invalid address"),
   NEXT_PUBLIC_PROFILE: z.string().optional(),
+  // Phase 5: Conditional / SEA UI gate. Defaults to "false" — the Conditional
+  // tab keeps its disabled placeholder unless this is explicitly set to "true".
+  // Independent of NEXT_PUBLIC_READ_ONLY / NEXT_PUBLIC_PROFILE: when SEA is
+  // enabled in a read-only or mainnet profile, the tab is visible but SEA
+  // ACTIONS (create / cancel / execute) are disabled (read-only toast),
+  // identical to how Market/Limit submit buttons behave today.
+  NEXT_PUBLIC_SEA_ENABLED: z.enum(["true", "false"]).optional(),
+  NEXT_PUBLIC_READ_ONLY: z.enum(["true", "false"]).optional(),
   NEXT_PUBLIC_TAKER_FEE_BPS: z.string().regex(/^\d+$/).optional(),
   NEXT_PUBLIC_TAKER_FEE_RECIPIENT: z
     .string()
     .regex(/^0x[0-9a-fA-F]{40}$/, "Invalid address")
     .optional(),
-  NEXT_PUBLIC_WEB3AUTH_NETWORK: z.string().optional(),
+  NEXT_PUBLIC_WEB3AUTH_NETWORK: z.enum(["sapphire_mainnet", "sapphire_devnet"]).optional(),
 });
 
 type Env = z.infer<typeof schema>;
@@ -36,6 +44,8 @@ export function env(): Env {
     NEXT_PUBLIC_RPC_URL: process.env.NEXT_PUBLIC_RPC_URL,
     NEXT_PUBLIC_ZEROEX_EXCHANGE_PROXY: process.env.NEXT_PUBLIC_ZEROEX_EXCHANGE_PROXY,
     NEXT_PUBLIC_PROFILE: process.env.NEXT_PUBLIC_PROFILE,
+    NEXT_PUBLIC_SEA_ENABLED: process.env.NEXT_PUBLIC_SEA_ENABLED,
+    NEXT_PUBLIC_READ_ONLY: process.env.NEXT_PUBLIC_READ_ONLY,
     NEXT_PUBLIC_TAKER_FEE_BPS: process.env.NEXT_PUBLIC_TAKER_FEE_BPS,
     NEXT_PUBLIC_TAKER_FEE_RECIPIENT: process.env.NEXT_PUBLIC_TAKER_FEE_RECIPIENT,
     NEXT_PUBLIC_WEB3AUTH_NETWORK: process.env.NEXT_PUBLIC_WEB3AUTH_NETWORK,
@@ -54,8 +64,7 @@ export function rpcUrl(): string {
   // Sensible defaults for Base
   if (e.NEXT_PUBLIC_CHAIN_ID === 8453) return "https://mainnet.base.org";
   if (e.NEXT_PUBLIC_CHAIN_ID === 84532) return "https://sepolia.base.org";
-  if (e.NEXT_PUBLIC_CHAIN_ID === 11155111)
-    return "https: //eth-sepolia.g.alchemy.com/v2/GmO-dgFRQXQ0TDACdPdaVZ_DCotBW-6e";
+  if (e.NEXT_PUBLIC_CHAIN_ID === 11155111) return "https://rpc.sepolia.org";
   // Fallback local
   return "http://localhost:8545";
 }

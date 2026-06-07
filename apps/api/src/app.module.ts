@@ -14,6 +14,8 @@ import { ZeroexHealthService } from './observability/zeroex-health.service';
 import { ShadowChecksService } from './observability/shadow-checks.service';
 import { LobRehydratorService } from './matching/lob-rehydrator.service';
 import { ConfigModule } from '@nestjs/config';
+import { SeaModule } from './sea/sea.module';
+import { CancelPairFloorModule } from './onchain/cancel-pair-floor.module';
 
 @Module({
   imports: [
@@ -26,6 +28,8 @@ import { ConfigModule } from '@nestjs/config';
     ZeroExModule, // 0x signing + addresses
     PublicModule, // REST/WS públicos
     MetricsModule,
+    CancelPairFloorModule, // Phase 3.x-b: on-chain cancelPair floor (global)
+    SeaModule, // SEA v1 substrate (Phase 1)
     ...(process.env.NODE_ENV !== 'production' ? [DevModule, EngineModule] : []), // /dev/*
   ],
 

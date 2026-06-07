@@ -84,3 +84,64 @@ export function validateLimitInput(
     derived: { baseWei, priceScaled, quoteWei, priceTicks },
   };
 }
+
+/* =========================
+ * Phase 5 Part B.2 — Market quote-denominated notional
+ * =========================
+ *
+ * Computes the pre-fee, quote-denominated notional from a /match/quote
+ * response. Matches the exact formula used by OrderBookService.quote(...)
+ * server-side:
+ *
+ *   notionalQ = Σ over fills of (priceTicks * priceTickQ * sizeBase / 10^baseDecimals)
+ *
+ * The formula is side-independent — the executed value is always priced in
+ * quote units regardless of which side is the taker. It is also pre-fee, to
+ * match the existing `validateLimitInput` rule (`quoteWei = baseWei *
+ * priceScaled / 10^baseDec`), so a Market order is judged against the same
+ * `minNotionalQ` rule as a Limit at the same effective price.
+ *
+ * Uses exact bigint math only; no floats. Returns 0n on missing/malformed
+ * fills — the caller's gate ("< minNotionalQ") then fires naturally.
+ *
+ * `side` is accepted in the signature for API clarity (callers know which
+ * side they quoted) but is not consulted — the math is symmetric.
+ */
+export type QuoteForNotional = {
+  fills?: ReadonlyArray<{ priceTicks: string; sizeBase: string }>;
+};
+
+export function marketQuoteNotionalQ(
+  market: Market,
+  _side: "BUY" | "SELL",
+  quote: QuoteForNotional,
+): bigint {
+  const baseDec = market.base.decimals;
+  const tickQ = (() => {
+    try {
+      return BigInt(market.rules.priceTickQ);
+    } catch {
+      return BigInt(0);
+    }
+  })();
+  if (tickQ <= BigInt(0)) return BigInt(0);
+  const denom = pow10(baseDec);
+  let total = BigInt(0);
+  for (const f of quote.fills ?? []) {
+    try {
+      const px = BigInt(f.priceTicks);
+      const sz = BigInt(f.sizeBase);
+      total += (px * tickQ * sz) / denom;
+    } catch {
+      // Skip malformed fills rather than throw — the gate below will catch
+      // an artificially-low total.
+    }
+  }
+  return total;
+}
+
+/** Render-friendly "Min notional: X SYMBOL" string for inline errors. */
+export function formatMinNotionalError(market: Market, minNotionalQ: bigint): string {
+  const human = ethers.formatUnits(minNotionalQ, market.quote.decimals);
+  return `Min notional: ${human} ${market.quote.symbol}`;
+}

@@ -9,14 +9,14 @@ export default function OrderbookTable({
   side,
   levels,
   market,
-  onTake,
-  getLevelTs, // ← NUEVO
+  onPick,
+  getLevelTs,
 }: {
   side: "bids" | "asks";
   levels: OrderbookLevel[];
   market: Market | null;
-  onTake?: (level: OrderbookLevel) => void;
-  getLevelTs?: (side: "bids" | "asks", priceTicks: string) => string | undefined; // ← NUEVO
+  onPick?: (level: OrderbookLevel) => void;
+  getLevelTs?: (side: "bids" | "asks", priceTicks: string) => string | undefined;
 }) {
   const quoteDec = market?.quote.decimals ?? 6;
   const baseDec = market?.base.decimals ?? 18;
@@ -46,7 +46,7 @@ export default function OrderbookTable({
                 className={`grid grid-cols-3 items-center font-mono rounded px-1 py-0.5 cursor-pointer transition-colors ${
                   side === "bids" ? "hover:bg-emerald-950/40" : "hover:bg-rose-950/40"
                 }`}
-                onClick={onTake ? () => onTake(l) : undefined}
+                onClick={onPick ? () => onPick(l) : undefined}
               >
                 <div
                   className={`text-right ${side === "bids" ? "text-emerald-400" : "text-rose-400"}`}

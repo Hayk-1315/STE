@@ -21,6 +21,10 @@ type QuoteReq = {
   side: Side; // "BUY" | "SELL" (taker perspective on BASE)
   sizeBase: string | number; // raw base units
   tif?: TIF; // default GTC
+  // Optional taker price cap (in ticks). Used by marketable-limit routing
+  // so the matcher only includes fills at-or-better than the caller's limit.
+  // Omitted → today's behavior (full sweep).
+  limitPriceTicks?: string | number;
 };
 
 const ZERO_ADDR = '0x0000000000000000000000000000000000000000' as const;
@@ -118,14 +122,46 @@ export class MatchController {
     // ⇩⇩ NUEVO: TIF con default GTC
     const tif: TIF = (b.tif as TIF) ?? 'GTC';
 
+    // Optional marketable-limit cap. Validated as a positive bigint; anything
+    // else is silently ignored to keep this strictly additive vs. legacy callers.
+    let limitPriceTicks: bigint | undefined;
+    if (b.limitPriceTicks !== undefined && b.limitPriceTicks !== null) {
+      try {
+        const raw =
+          typeof b.limitPriceTicks === 'string'
+            ? b.limitPriceTicks
+            : String(b.limitPriceTicks);
+        const v = BigInt(raw);
+        if (v > 0n) limitPriceTicks = v;
+      } catch {
+        throw new BadRequestException(
+          'limitPriceTicks must be a positive integer',
+        );
+      }
+    }
+
+    // Contexto del mercado (para saber base/quote y reglas).
+    // Se resuelve antes que el quote para poder rechazar tamaños inválidos
+    // sin gastar trabajo del matcher. Phase 5 Part B.1: gate sizes below
+    // market.rules.minSizeB con un código estable consumible por cualquier
+    // caller (web, CLI, futuras integraciones SEA). Cumple simetría con la
+    // ruta de Limit, que ya valida `minSizeB` en frontend
+    // (`validateLimitInput`) y backend (placement service / validator).
+    const ctx = await this.persistence.getTradingContext(b.marketId);
+    if (sizeBase < ctx.minSizeB) {
+      throw new BadRequestException({
+        message: 'size_below_min_size',
+        requested: sizeBase.toString(),
+        minSizeB: ctx.minSizeB.toString(),
+      });
+    }
+
     const plan = await this.ob.quote({
       marketIdOrSymbol: b.marketId,
       side: side as Side,
       sizeBase,
+      ...(limitPriceTicks !== undefined ? { limitPriceTicks } : {}),
     });
-
-    // Contexto del mercado (para saber base/quote)
-    const ctx = await this.persistence.getTradingContext(b.marketId);
 
     let noTxReason: string | undefined;
 
@@ -144,6 +180,41 @@ export class MatchController {
       throw new BadRequestException('fok_insufficient_liquidity');
     }
     // Para IOC / GTC: seguimos adelante; el builder usará plan.fills tal cual.
+
+    // Phase 5 Part B.2: reject executed quotes whose quote-denominated notional
+    // falls below market.rules.minNotionalQ. Mirrors the existing Limit-mode
+    // rule (`validateLimitInput`) so Market and Limit are judged against the
+    // same `minNotionalQ` at the same effective price. Only applied when there
+    // is actual execution (`fills.length > 0`); empty-book responses continue
+    // to flow through the existing `noTxReason: 'no_fills'` path so callers
+    // can render a "no liquidity" message instead of an error.
+    if (Array.isArray(plan.fills) && plan.fills.length > 0) {
+      // Recompute from fills using the canonical formula
+      //   notionalQ = Σ priceTicks * priceTickQ * sizeBase / 10^baseDecimals
+      // This is identical to the matcher's internal `takerTotalQ`
+      // (also exposed as `plan.takerAmount` server-side); recomputing here
+      // makes the gate independent of any future shape change to that field.
+      const denomBase = 10n ** BigInt(ctx.baseDecimals);
+      let notionalQ = 0n;
+      for (const f of plan.fills) {
+        try {
+          const px = BigInt(f.priceTicks);
+          const sz = BigInt(f.sizeBase);
+          notionalQ += (px * ctx.priceTickQ * sz) / denomBase;
+        } catch {
+          // skip malformed fill rather than throw
+        }
+      }
+      if (notionalQ < ctx.minNotionalQ) {
+        this.metrics.quotesTotal.inc();
+        this.metrics.quoteLatency.observe(Date.now() - t0);
+        throw new BadRequestException({
+          message: 'notional_below_min_notional',
+          notionalQ: notionalQ.toString(),
+          minNotionalQ: ctx.minNotionalQ.toString(),
+        });
+      }
+    }
 
     let txData: TxData | undefined;
     let txList: TxData[] | undefined; // ⬅️ lista secuencial de txs

@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { OrderSide, OrderStatus, EventType } from '@prisma/client';
 import { PersistenceRepository } from './persistence.repository';
 import type { LimitOrder, Signature } from '../zeroex/limit-order.types';
+import { normalizeOrderForJson } from './raw-order.util';
 
 export type Side = 'BUY' | 'SELL';
 
@@ -137,8 +138,18 @@ export class OrderBookService {
 
     if (!hit) return false;
 
-    // Attach raw payload for 0x EP calldata building
-    hit.rawOrder = raw.order;
+    // Attach raw payload for 0x EP calldata building.
+    // Phase 5 P0 follow-up: callers pass two different shapes for `raw.order`:
+    //   - POST /orders forwards JSON wire amounts (decimal strings) unchanged.
+    //   - SEA fire (IntentFireService.sanitizeOrder) produces bigint primitives.
+    // The in-memory copy is echoed back inside /match/quote responses, and
+    // JSON.stringify rejects bigint primitives. Normalising here (the single
+    // chokepoint for in-memory raw writes) keeps the in-memory shape JSON-safe
+    // and consistent with the DB-persisted shape (which already goes through
+    // normalizeOrderForJson at attachRawToOrder time). Downstream consumers
+    // (orderbook.quote fee calc, match.controller sanitizeOrder for ABI)
+    // already accept string amounts via toBig() coercion.
+    hit.rawOrder = normalizeOrderForJson(raw.order) as unknown as LimitOrder;
     hit.rawSig = raw.signature as Signature;
 
     // Guarda expiry en segundos si viene del raw
@@ -386,7 +397,15 @@ export class OrderBookService {
 
   // Build a taker sweep plan from top-of-book up to sizeBase.
   // Returns the fills list and the total taker-side amount.
-  async quote(q: { marketIdOrSymbol: string; side: Side; sizeBase: bigint }) {
+  // Optional `limitPriceTicks` truncates the sweep when the next level is
+  // worse than the caller's price (used by marketable-limit routing). Price-time
+  // priority and best-price-first ordering are unchanged: we only stop early.
+  async quote(q: {
+    marketIdOrSymbol: string;
+    side: Side;
+    sizeBase: bigint;
+    limitPriceTicks?: bigint;
+  }) {
     const ctx = await this.repo.getTradingContext(q.marketIdOrSymbol);
     const bookKey = ctx.symbol;
     const b = this.book(bookKey);
@@ -406,8 +425,16 @@ export class OrderBookService {
     let takerTotalQ = 0n;
     let takerFeeTotal = 0n;
 
+    const limit = q.limitPriceTicks;
+
     for (const level of levels) {
       if (remaining <= 0n) break;
+      // Marketable-limit price guard. Asks are ascending and bids are descending,
+      // so the first level worse than the user's limit ends the sweep.
+      if (limit !== undefined) {
+        if (q.side === 'BUY' && level.priceTicks > limit) break;
+        if (q.side === 'SELL' && level.priceTicks < limit) break;
+      }
       const exec = remaining < level.sizeBase ? remaining : level.sizeBase;
       remaining -= exec;
 

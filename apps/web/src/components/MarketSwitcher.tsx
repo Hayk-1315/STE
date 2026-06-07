@@ -49,10 +49,10 @@ export default function MarketSwitcher({ currentSymbol }: { currentSymbol?: stri
   const hasCurrent = mkts.some((m) => m.symbol.toUpperCase() === value);
 
   return (
-    <div className="mt-3 flex items-center gap-2 text-sm">
+    <div className="flex items-center gap-2 text-sm">
       <span className="text-neutral-400">Market</span>
       <select
-        className="border border-neutral-700 bg-neutral-900 rounded-lg px-2 py-1 text-sm font-mono shrink-0"
+        className="border border-neutral-700/60 bg-neutral-950/80 rounded-lg px-2 py-1 text-sm font-mono text-neutral-200 shrink-0"
         aria-label="Select market"
         title="Select market"
         value={hasCurrent ? value : ""}

@@ -14,6 +14,41 @@ import type { LimitOrder as ZxLimitOrder } from '../zeroex/limit-order.types';
 import { JsonRpcProvider, Interface } from 'ethers';
 import type { ZeroExConfig } from '../zeroex/zeroex.config';
 import { MetricsService } from '../observability/metrics.service';
+import { CancelPairFloorRepository } from './cancel-pair-floor.repository';
+
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, resolve as pathResolve } from 'node:path';
+
+// Mirrors FillWatcher's cursor format ({ "lastScanned": "<int>" }) so operators
+// have a single mental model for both watchers. Best-effort I/O — never throws.
+function loadCursor(file: string): number | null {
+  try {
+    if (!existsSync(file)) return null;
+    const raw = readFileSync(file, 'utf8');
+    const parsed = JSON.parse(raw) as { lastScanned?: string };
+    const n = Number.parseInt(String(parsed.lastScanned ?? ''), 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+function saveCursor(file: string, height: number): void {
+  try {
+    const dir = dirname(file);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      file,
+      JSON.stringify({ lastScanned: String(height) }),
+      'utf8',
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+// 500 blocks ≈ 17 min on a 2 s chain (Base) and ≈ 100 min on a 12 s chain (Sepolia).
+// Matches FillWatcher's threshold for symmetry.
+const STALE_CURSOR_BLOCK_THRESHOLD = 500;
 
 // --- type guards/helpers estrictos ---
 const SELECTOR_CANCEL = '0x7d49ec1a' as const; // cancelLimitOrder(...)
@@ -105,6 +140,17 @@ export class CancelWatcherService implements OnModuleInit, OnModuleDestroy {
   private timer?: ReturnType<typeof setInterval>;
   private readonly enabled: boolean;
   private readonly chainId: number;
+  // Upper bound on blocks processed per tick to keep catch-up loops bounded
+  // after long downtime. Read from CANCEL_WATCHER_MAX_BLOCKS_PER_TICK, default
+  // 100, clamped to [1, 500].
+  private readonly maxBlocksPerTick: number;
+
+  // Persisted cursor so on-chain cancels during API downtime are not silently
+  // dropped across restarts. Symmetric with FillWatcher's cursor.
+  private readonly cursorFile: string = pathResolve(
+    process.cwd(),
+    '.cache/cancel-watcher.cursor.json',
+  );
 
   constructor(
     private readonly addr: ZeroExAddressesService,
@@ -112,6 +158,7 @@ export class CancelWatcherService implements OnModuleInit, OnModuleDestroy {
     private readonly ob: OrderBookService,
     private readonly repo: PersistenceRepository,
     private readonly metrics: MetricsService,
+    private readonly floorRepo: CancelPairFloorRepository,
     @Inject('ZEROEX_CONFIG') cfg: ZeroExConfig,
   ) {
     // Sólo activa si DEV_ONCHAIN_WATCHER=1 (para no afectar producción)
@@ -133,6 +180,14 @@ export class CancelWatcherService implements OnModuleInit, OnModuleDestroy {
     // Chain (por defecto Base mainnet si no hay CHAIN_ID)
     const cid = Number(process.env.CHAIN_ID ?? 8453);
     this.chainId = Number.isFinite(cid) && cid > 0 ? cid : 8453;
+
+    // Catch-up batch size. Invalid / missing values fall back to default 100.
+    const rawMax = Number(
+      process.env.CANCEL_WATCHER_MAX_BLOCKS_PER_TICK ?? 100,
+    );
+    const parsedMax =
+      Number.isFinite(rawMax) && rawMax > 0 ? Math.floor(rawMax) : 100;
+    this.maxBlocksPerTick = Math.min(500, Math.max(1, parsedMax));
   }
 
   async onModuleInit(): Promise<void> {
@@ -140,16 +195,55 @@ export class CancelWatcherService implements OnModuleInit, OnModuleDestroy {
       this.log.log('disabled (DEV_ONCHAIN_WATCHER!=1)');
       return;
     }
-    // escanear también el siguiente bloque nuevo
-    this.lastScanned = (await this.provider.getBlockNumber()) - 1;
+
+    let latest: number;
+    try {
+      latest = await this.provider.getBlockNumber();
+    } catch (e) {
+      // Symmetric with FillWatcher: a boot-time RPC failure must not silently
+      // crash the lifecycle hook and leave the system without cancel
+      // reconciliation. Log loudly and bail out without scheduling the tick.
+      this.log.error(
+        `boot_failed reason="${e instanceof Error ? e.message : String(e)}" — cancel reconciliation will NOT run`,
+      );
+      return;
+    }
+
+    const persisted = loadCursor(this.cursorFile);
+    if (persisted && persisted <= latest) {
+      // Resume exactly where the previous run left off so cancels emitted
+      // during downtime are still reconciled.
+      this.lastScanned = persisted;
+    } else {
+      // No cursor (first run, corrupt file, or persisted > latest from a
+      // chain swap) → anchor near head and save immediately.
+      this.lastScanned = Math.max(0, latest - 1);
+      saveCursor(this.cursorFile, this.lastScanned);
+    }
+
+    this.log.log(
+      `started cursor=${this.lastScanned} latest=${latest} cursor_source=${
+        persisted && persisted <= latest ? 'persisted' : 'fresh'
+      }`,
+    );
+
+    // Stale-cursor guard: a long lag means catch-up will delay real-time
+    // reconciliation and may collide with RPC throttling. Surface it; do not
+    // auto-reset (that would mask legitimate downtime catch-up).
+    const lag = latest - this.lastScanned;
+    if (lag > STALE_CURSOR_BLOCK_THRESHOLD) {
+      this.log.warn(
+        `cursor_stale lag=${lag} blocks behind latest=${latest}. ` +
+          `Catch-up will delay on-chain reconciliation and may miss events if RPC drops blocks. ` +
+          `Delete ${this.cursorFile} and restart to resume fresh near head.`,
+      );
+    }
 
     this.timer = setInterval(() => {
       void this.tick().catch((e: unknown) =>
         this.log.error(e instanceof Error ? e.message : String(e)),
       );
     }, 2000);
-
-    this.log.log(`started at block ${this.lastScanned}`);
   }
 
   onModuleDestroy(): void {
@@ -178,15 +272,42 @@ export class CancelWatcherService implements OnModuleInit, OnModuleDestroy {
     const latest = await this.provider.getBlockNumber();
     if (latest <= this.lastScanned) return;
 
-    for (let b = this.lastScanned + 1; b <= latest; b++) {
+    // Cap the per-tick batch so a long downtime catch-up does not pin the
+    // event loop or hammer the RPC. Cursor is persisted to `target` (not
+    // `latest`) so the remaining range is picked up on subsequent ticks.
+    const target = Math.min(latest, this.lastScanned + this.maxBlocksPerTick);
+
+    for (let b = this.lastScanned + 1; b <= target; b++) {
       // ethers v6: usar JSON-RPC directo para obtener el bloque con transacciones
       const hexBlock = '0x' + b.toString(16);
-      const blockUnknown: unknown = await this.provider.send(
-        'eth_getBlockByNumber',
-        [hexBlock, true], // include full tx objects
-      );
+      let blockUnknown: unknown;
+      try {
+        blockUnknown = await this.provider.send('eth_getBlockByNumber', [
+          hexBlock,
+          true, // include full tx objects
+        ]);
+      } catch (e) {
+        // RPC error (e.g. Alchemy 429 / compute-units exceeded). The cursor is
+        // not advanced because we return before the end-of-tick assignment, so
+        // this block is retried on the next tick. Log loudly so operators can
+        // tell reconciliation is paused on throttling rather than silently
+        // stuck.
+        this.log.warn(
+          `block_fetch_failed block=${b} reason="${
+            e instanceof Error ? e.message : String(e)
+          }" — will retry next tick`,
+        );
+        return;
+      }
 
-      if (!isRpcBlockWithTxs(blockUnknown)) continue;
+      if (!isRpcBlockWithTxs(blockUnknown)) {
+        // Symmetric with FillWatcher: a malformed payload silently advances
+        // past the block at end of tick, so surface it explicitly.
+        this.log.warn(
+          `block_skipped block=${b} reason=missing_or_invalid_transactions`,
+        );
+        continue;
+      }
 
       const txs = blockUnknown.transactions;
       for (const tx of txs) {
@@ -289,6 +410,28 @@ export class CancelWatcherService implements OnModuleInit, OnModuleDestroy {
               );
             }
 
+            // Phase 3.x-b: persist the highest observed minValidSalt for this
+            // (maker, makerToken, takerToken) triple so SEA can reject
+            // pre-signed CL intents whose salt has been invalidated on-chain.
+            // Best-effort: a failure here logs a warning but does not break
+            // the watcher; the next cancelPair event will move the floor
+            // monotonically anyway.
+            try {
+              await this.floorRepo.upsertFloor({
+                maker: makerLower,
+                makerToken: mk,
+                takerToken: tk,
+                minValidSalt,
+                fromTxHash: tx.hash ?? null,
+              });
+            } catch (e) {
+              this.log.warn(
+                `[CancelWatcher] cancelPair: floor upsert failed → ${
+                  e instanceof Error ? e.message : String(e)
+                }`,
+              );
+            }
+
             this.log.log(
               `[CancelWatcher] cancelPair: ${toCancel.length} order(s) cancelled for ${m.symbol} maker=${makerLower} salt<${minValidSalt.toString()}`,
             );
@@ -385,6 +528,17 @@ export class CancelWatcherService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    this.lastScanned = latest;
+    this.lastScanned = target;
+    saveCursor(this.cursorFile, target);
+
+    // Low-noise progress indicator while catching up. Only fires when the
+    // batch cap actually limited this tick — steady-state ticks (target ===
+    // latest) stay silent.
+    if (target < latest) {
+      const remaining = latest - target;
+      this.log.log(
+        `catch_up cursor=${target} latest=${latest} remaining=${remaining}`,
+      );
+    }
   }
 }

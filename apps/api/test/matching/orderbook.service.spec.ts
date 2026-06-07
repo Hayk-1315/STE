@@ -261,6 +261,160 @@ describe('OrderBookService', () => {
 
     expect(quote.remainingBase).toBe('100000000000000000');
   });
+
+  describe('quote() with limitPriceTicks (marketable-limit cap)', () => {
+    it('BUY: truncates the sweep when the next ask is above the limit', async () => {
+      await service.place({
+        marketId: 'WETH-USDC',
+        orderHash: '0xask-cheap',
+        maker: '0x8888888888888888888888888888888888888888',
+        side: 'SELL',
+        priceTicks: 2_500_000n,
+        sizeBase: 100_000_000_000_000_000n, // 0.1
+      });
+      await service.place({
+        marketId: 'WETH-USDC',
+        orderHash: '0xask-expensive',
+        maker: '0x9999999999999999999999999999999999999999',
+        side: 'SELL',
+        priceTicks: 2_600_000n,
+        sizeBase: 100_000_000_000_000_000n, // 0.1
+      });
+
+      const quote = await service.quote({
+        marketIdOrSymbol: 'WETH-USDC',
+        side: 'BUY',
+        sizeBase: 200_000_000_000_000_000n, // wants 0.2
+        limitPriceTicks: 2_500_000n, // refuses anything above 2.5M
+      });
+
+      expect(quote.fills).toHaveLength(1);
+      expect(quote.fills[0]).toMatchObject({
+        makerOrderHash: '0xask-cheap',
+        priceTicks: '2500000',
+        sizeBase: '100000000000000000',
+      });
+      // Expect 0.1 unfillable inside the user's limit.
+      expect(quote.remainingBase).toBe('100000000000000000');
+    });
+
+    it('SELL: truncates the sweep when the next bid is below the limit', async () => {
+      await service.place({
+        marketId: 'WETH-USDC',
+        orderHash: '0xbid-high',
+        maker: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1',
+        side: 'BUY',
+        priceTicks: 2_600_000n,
+        sizeBase: 100_000_000_000_000_000n, // 0.1
+      });
+      await service.place({
+        marketId: 'WETH-USDC',
+        orderHash: '0xbid-low',
+        maker: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2',
+        side: 'BUY',
+        priceTicks: 2_500_000n,
+        sizeBase: 100_000_000_000_000_000n, // 0.1
+      });
+
+      const quote = await service.quote({
+        marketIdOrSymbol: 'WETH-USDC',
+        side: 'SELL',
+        sizeBase: 200_000_000_000_000_000n, // wants 0.2
+        limitPriceTicks: 2_600_000n, // refuses anything below 2.6M
+      });
+
+      expect(quote.fills).toHaveLength(1);
+      expect(quote.fills[0]).toMatchObject({
+        makerOrderHash: '0xbid-high',
+        priceTicks: '2600000',
+        sizeBase: '100000000000000000',
+      });
+      expect(quote.remainingBase).toBe('100000000000000000');
+    });
+
+    it('BUY: includes a level priced exactly at the limit', async () => {
+      await service.place({
+        marketId: 'WETH-USDC',
+        orderHash: '0xask-at-limit',
+        maker: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa3',
+        side: 'SELL',
+        priceTicks: 2_500_000n,
+        sizeBase: 100_000_000_000_000_000n,
+      });
+
+      const quote = await service.quote({
+        marketIdOrSymbol: 'WETH-USDC',
+        side: 'BUY',
+        sizeBase: 100_000_000_000_000_000n,
+        limitPriceTicks: 2_500_000n,
+      });
+
+      expect(quote.fills).toHaveLength(1);
+      expect(quote.remainingBase).toBe('0');
+    });
+
+    // Regression for QA-reported bug: BUY limit at the lower ask must consume
+    // that level and stop before the adjacent ask one tick higher. The matcher
+    // logic was always correct — the failure mode was the frontend dropping
+    // the cap before /match/quote saw it — but this exact case is pinned here
+    // so the matcher can never silently regress on adjacent levels.
+    it('BUY at limit=lower ask: consumes lower ask, stops before adjacent higher ask', async () => {
+      await service.place({
+        marketId: 'WETH-USDC',
+        orderHash: '0xask-100',
+        maker: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa5',
+        side: 'SELL',
+        priceTicks: 2_500_000n, // "100"
+        sizeBase: 40_000_000_000_000_000n, // 0.04
+      });
+      await service.place({
+        marketId: 'WETH-USDC',
+        orderHash: '0xask-101',
+        maker: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa6',
+        side: 'SELL',
+        priceTicks: 2_500_001n, // "101" — one tick above
+        sizeBase: 10_000_000_000_000_000n, // 0.01
+      });
+
+      const quote = await service.quote({
+        marketIdOrSymbol: 'WETH-USDC',
+        side: 'BUY',
+        sizeBase: 250_000_000_000_000_000n, // 0.25 requested
+        limitPriceTicks: 2_500_000n,
+      });
+
+      expect(quote.fills).toHaveLength(1);
+      expect(quote.fills[0]).toMatchObject({
+        makerOrderHash: '0xask-100',
+        priceTicks: '2500000',
+        sizeBase: '40000000000000000', // 0.04
+      });
+      // 0.25 requested − 0.04 fillable = 0.21 unfilled (must NOT touch 2_500_001)
+      expect(quote.remainingBase).toBe('210000000000000000');
+    });
+
+    it('BUY: returns no fills when the limit is below every ask', async () => {
+      await service.place({
+        marketId: 'WETH-USDC',
+        orderHash: '0xask-too-pricey',
+        maker: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa4',
+        side: 'SELL',
+        priceTicks: 2_500_000n,
+        sizeBase: 100_000_000_000_000_000n,
+      });
+
+      const quote = await service.quote({
+        marketIdOrSymbol: 'WETH-USDC',
+        side: 'BUY',
+        sizeBase: 100_000_000_000_000_000n,
+        limitPriceTicks: 2_400_000n,
+      });
+
+      expect(quote.fills).toHaveLength(0);
+      expect(quote.remainingBase).toBe('100000000000000000');
+    });
+  });
+
   describe('applyExternalFill()', () => {
     it('should fully fill an order and remove it from the book', async () => {
       await service.place({
@@ -376,6 +530,110 @@ describe('OrderBookService', () => {
       expect(dump.asks).toHaveLength(0);
     });
   });
+  describe('attachRaw() — Phase 5 P0 follow-up: in-memory raw must stay JSON-safe', () => {
+    // Reproduces the SEA CL fire path: the LimitOrder forwarded to attachRaw
+    // has `bigint` primitives in makerAmount / takerAmount / takerTokenFeeAmount
+    // / salt (because IntentFireService.sanitizeOrder coerces with toBig).
+    // Before the fix, those bigints were stored as-is and then echoed into the
+    // /match/quote response via plan.fills[i].rawOrder, where JSON.stringify
+    // would throw `Do not know how to serialize a BigInt`.
+    const buildSeaShapeOrder = () => ({
+      makerToken: '0xbase',
+      takerToken: '0xquote',
+      makerAmount: 1_000_000_000_000_000_000n, // bigint primitive
+      takerAmount: 300_000_000_000n, // bigint primitive
+      takerTokenFeeAmount: 0n, // bigint primitive
+      maker: '0xmaker',
+      taker: '0x0000000000000000000000000000000000000000',
+      sender: '0x0000000000000000000000000000000000000000',
+      feeRecipient: '0x0000000000000000000000000000000000000000',
+      pool: '0x' + '0'.repeat(64),
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      salt: 12345n, // bigint primitive
+    });
+    const dummySig = {
+      signatureType: 2,
+      v: 27,
+      r: '0x' + 'a'.repeat(64),
+      s: '0x' + 'b'.repeat(64),
+    };
+
+    it('normalizes bigint amounts so JSON.stringify(quote.fills) succeeds', async () => {
+      await service.place({
+        marketId: 'WETH-USDC',
+        orderHash: '0xsea-placed',
+        maker: '0xsea',
+        side: 'SELL',
+        priceTicks: 2_500_000n,
+        sizeBase: 100_000_000_000_000_000n,
+      });
+
+      // Drive the SEA CL fire shape (bigint primitives) into attachRaw.
+      const attached = await service.attachRaw(
+        'WETH-USDC',
+        '0xsea-placed',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { order: buildSeaShapeOrder() as any, signature: dummySig as any },
+      );
+      expect(attached).toBe(true);
+
+      const quote = await service.quote({
+        marketIdOrSymbol: 'WETH-USDC',
+        side: 'BUY',
+        sizeBase: 50_000_000_000_000_000n,
+      });
+      expect(quote.fills).toHaveLength(1);
+
+      // Smoke test: JSON.stringify must not throw on the fill payload.
+      expect(() => JSON.stringify(quote.fills)).not.toThrow();
+
+      // And the persisted raw amounts MUST be decimal strings now, not bigints.
+      const raw = quote.fills[0].rawOrder as unknown as Record<string, unknown>;
+      expect(typeof raw.makerAmount).toBe('string');
+      expect(typeof raw.takerAmount).toBe('string');
+      expect(typeof raw.takerTokenFeeAmount).toBe('string');
+      expect(typeof raw.salt).toBe('string');
+      expect(raw.makerAmount).toBe('1000000000000000000');
+      expect(raw.takerAmount).toBe('300000000000');
+      expect(raw.salt).toBe('12345');
+    });
+
+    it('is a no-op for the normal /orders shape (string amounts stay strings)', async () => {
+      await service.place({
+        marketId: 'WETH-USDC',
+        orderHash: '0xnormal-placed',
+        maker: '0xmaker2',
+        side: 'SELL',
+        priceTicks: 2_500_000n,
+        sizeBase: 100_000_000_000_000_000n,
+      });
+
+      const wireOrder = {
+        ...buildSeaShapeOrder(),
+        makerAmount: '1000000000000000000',
+        takerAmount: '300000000000',
+        takerTokenFeeAmount: '0',
+        salt: '12345',
+      };
+      await service.attachRaw(
+        'WETH-USDC',
+        '0xnormal-placed',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { order: wireOrder as any, signature: dummySig as any },
+      );
+
+      const quote = await service.quote({
+        marketIdOrSymbol: 'WETH-USDC',
+        side: 'BUY',
+        sizeBase: 50_000_000_000_000_000n,
+      });
+      const raw = quote.fills[0].rawOrder as unknown as Record<string, unknown>;
+      expect(raw.makerAmount).toBe('1000000000000000000');
+      expect(raw.takerAmount).toBe('300000000000');
+      expect(raw.salt).toBe('12345');
+    });
+  });
+
   describe('cancel()', () => {
     it('should remove an order from the book', async () => {
       await service.place({

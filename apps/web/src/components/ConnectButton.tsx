@@ -12,7 +12,7 @@ export default function ConnectButton() {
     return (
       <div className="flex items-center gap-2">
         <button
-          className="rounded-full px-3 py-1 text-xs font-medium bg-gray-800 text-white hover:bg-gray-700 transition"
+          className="rounded-full px-3 py-1 text-xs font-medium bg-gray-800 text-neutral-200 hover:bg-gray-700 transition"
           onClick={disconnect}
         >
           Disconnect

@@ -1,36 +1,41 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-// apps/web/src/components/TakerBox.tsx
+// apps/web/src/hooks/useMarketOrder.ts
 "use client";
 
-import React, { useMemo, useState } from "react";
+// Market-order execution pipeline: quote → approve → execute → apply, plus
+// preflight gas check. Consumed by TradePanel's Market mode. The "taker" naming
+// inside this file refers to the 0x v4 LimitOrder taker side (the field names
+// returned by the backend match what the on-chain ExchangeProxy expects), not
+// to a separate UI surface.
+
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ethers } from "ethers";
+import { toast } from "sonner";
 import type { Market } from "@/lib/api";
 import { postMatchQuote } from "@/lib/api";
 import { env } from "@/lib/env";
 import { useWallet } from "@/providers/wallet";
-import { toast } from "sonner";
-import { validateLimitInput } from "@/lib/validation";
-import { sanitizeDecimal } from "@/lib/number";
-import Segmented from "@/components/ui/Segmented";
 import { approveIfNeeded, erc20Allowance } from "@/lib/erc20";
-import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/cn";
 import type { QuoteResponse as MatchQuoteResponse, Tif } from "@/lib/types";
-import { getFeeInfo } from "@/lib/fees";
 import { getZeroExDomainFallback } from "@/lib/zeroex";
 
-type Props = { market: Market | null };
-
-type TxData = { to: `0x${string}`; data: `0x${string}`; value: string };
+export type TxData = { to: `0x${string}`; data: `0x${string}`; value: string };
 
 // Extendemos el tipo de respuesta para incluir txData/txList y campos de fee
-type MatchQuoteWithTx = MatchQuoteResponse & {
+export type MatchQuoteWithTx = MatchQuoteResponse & {
   txData?: TxData;
   txList?: TxData[];
   takerTotalAmount?: string;
   takerFeeTotal?: string;
   takerFeeRecipient?: string;
   feeRecipient?: string;
+};
+
+export type MarketOrderResult = {
+  fills: number;
+  hasTx: boolean;
+  txHash?: string;
+  txData?: TxData;
 };
 
 // —— helpers de error legible ——
@@ -82,16 +87,36 @@ function humanizeApiError(e: unknown, market?: Market | null, _side?: "BUY" | "S
     : "There isn’t enough liquidity for that size.";
 }
 
-export default function TakerBox({ market }: Props) {
-  const { getSigner } = useWallet();
-  const [side, setSide] = useState<"BUY" | "SELL">("BUY");
-  const [sizeHuman, setSizeHuman] = useState("0.1");
-  const [busy, setBusy] = useState(false);
-  const [tif, setTif] = useState<Tif>("IOC"); // ⬅️ NUEVO estado TIF
+export type UseMarketOrderParams = {
+  market: Market | null;
+  side: "BUY" | "SELL";
+  sizeHuman: string;
+  tif: Tif;
+  // Optional taker price cap (in ticks). When set, the backend matcher
+  // truncates its sweep so the resulting tx cannot fill above (BUY) or
+  // below (SELL) this price. Used by TradePanel's marketable-limit branch.
+  limitPriceTicks?: string;
+};
 
-  type Result = { fills: number; hasTx: boolean; txHash?: string; txData?: TxData };
-  const [result, setResult] = useState<Result | null>(null);
+export function useMarketOrder({
+  market,
+  side,
+  sizeHuman,
+  tif,
+  limitPriceTicks,
+}: UseMarketOrderParams) {
+  const { getSigner } = useWallet();
+
+  const [busy, setBusy] = useState(false);
+
+  const [result, setResult] = useState<MarketOrderResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // Phase 5 Part B.2: synchronous parse of the latest /match/quote failure
+  // code (e.g. "notional_below_min_notional") so a consumer that awaits
+  // onQuote() can inspect WHY null came back without depending on stale
+  // React state. Refs are read synchronously and are not subject to render
+  // batching. Cleared on every successful quote.
+  const lastFailureCodeRef = useRef<string | null>(null);
 
   // Flujo 3 pasos
   const [q, setQ] = useState<MatchQuoteWithTx | null>(null);
@@ -104,10 +129,9 @@ export default function TakerBox({ market }: Props) {
   const [pendingTxData, setPendingTxData] = useState<TxData | null>(null);
   const [takerFee, setTakerFee] = useState<bigint>(BigInt(0));
   const [feeRecipient, setFeeRecipient] = useState<`0x${string}` | null>(null);
-  const short = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 
   // Devuelve { label, explorerTxBase } según NEXT_PUBLIC_CHAIN_ID
-  const { label: chainLabel, explorerTxBase } = React.useMemo(() => {
+  const { label: chainLabel, explorerTxBase } = useMemo(() => {
     const id = Number(env().NEXT_PUBLIC_CHAIN_ID);
     if (id === 8453) return { label: "Base", explorerTxBase: "https://basescan.org/tx/" };
     if (id === 11155111)
@@ -117,29 +141,32 @@ export default function TakerBox({ market }: Props) {
     return { label: `Chain ${id}`, explorerTxBase: "https://etherscan.io/tx/" }; // fallback genérico
   }, []);
 
-  // Rellena el Taker al pulsar "Take" en el orderbook
-  React.useEffect(() => {
-    const handler = (e: Event) => {
-      const d = (e as CustomEvent).detail as
-        | { side?: "BUY" | "SELL"; sizeHuman?: string }
-        | undefined;
-      if (!d) return;
-      if (d.side) setSide(d.side);
-      if (d.sizeHuman) setSizeHuman(d.sizeHuman);
-    };
-    window.addEventListener("ste:set-taker", handler as EventListener);
-    return () => window.removeEventListener("ste:set-taker", handler as EventListener);
-  }, []);
-
-  const readOnly = useMemo(
-    () =>
-      process.env.NEXT_PUBLIC_READ_ONLY === "true" || process.env.NEXT_PUBLIC_PROFILE === "mainnet",
-    [],
-  );
+  // Invalidate any cached quote/plan whenever the inputs that produced it change.
+  // Prevents executing a stale plan against the wrong side / size / TIF — the unified
+  // panel's prominent Buy/Sell toggle makes this race much easier to hit.
+  useEffect(() => {
+    if (q === null) return;
+    setQ(null);
+    setResult(null);
+    setErr(null);
+    setNeedsApproval(false);
+    setNeeded(BigInt(0));
+    setTakerToken(null);
+    setTakerFee(BigInt(0));
+    setFeeRecipient(null);
+    setPendingTxData(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [market?.symbol, side, sizeHuman, tif, limitPriceTicks]);
 
   // -------- Paso 1: QUOTE --------
-  async function onQuote() {
-    if (!market) return;
+  // Returns the fresh quote on success, or null on any failure / no-tx path
+  // (matches the existing state-setting semantics). Existing callers that
+  // ignore the return value (e.g. TradePanel) are unaffected; the SEA Phase 5
+  // ReadyIntentRowActions uses the returned value to run a synchronous
+  // "sufficient liquidity" guard before approve/execute, avoiding stale-state
+  // reads from React's batched updates.
+  async function onQuote(): Promise<MatchQuoteWithTx | null> {
+    if (!market) return null;
     setBusy(true);
     setErr(null);
     setResult(null);
@@ -153,6 +180,7 @@ export default function TakerBox({ market }: Props) {
         side,
         sizeBase: sizeBaseStr,
         ...(tif === "FOK" ? { tif: "FOK" as Tif } : {}),
+        ...(limitPriceTicks ? { limitPriceTicks } : {}),
       })) as MatchQuoteWithTx;
 
       // Detecta liquidez total en fills (para mensajes claros)
@@ -181,7 +209,7 @@ export default function TakerBox({ market }: Props) {
           setNeedsApproval(false);
           setErr(msg);
           toast.error(msg, { duration: 4000 });
-          return;
+          return null;
         }
         if (availableBase < requested) {
           const humanAvail = (() => {
@@ -197,7 +225,7 @@ export default function TakerBox({ market }: Props) {
           setNeedsApproval(false);
           setErr(msg);
           toast.error(msg, { duration: 4500 });
-          return;
+          return null;
         }
         const msg = "Couldn’t build the transaction for this quote.";
         setQ(null);
@@ -205,7 +233,7 @@ export default function TakerBox({ market }: Props) {
         setNeedsApproval(false);
         setErr(msg);
         toast.error(msg, { duration: 4000 });
-        return;
+        return null;
       }
 
       // Con txData o txList → flujo normal: aprobar si hace falta y permitir Execute
@@ -282,10 +310,25 @@ export default function TakerBox({ market }: Props) {
       // Guarda txData (single) opcionalmente; para multi usamos txList al ejecutar
       setPendingTxData(qq.txData as TxData | null);
 
+      // Phase 5 Part B.2: clear any prior failure code on success.
+      lastFailureCodeRef.current = null;
+
       toast.success(`Plan ready · fills=${qq.fills?.length ?? 0}`, { duration: 2500 });
+      return qq;
     } catch (e) {
       const raw = messageFromUnknown(e);
       const lower = raw.toLowerCase();
+
+      // Phase 5 Part B.2: classify the backend rejection code so CMR
+      // ReadyIntentRowActions can surface the specific reason without
+      // depending on stale React state. Simple substring check is robust to
+      // both string and JSON-payload error bodies.
+      lastFailureCodeRef.current = (() => {
+        if (lower.includes("notional_below_min_notional")) return "notional_below_min_notional";
+        if (lower.includes("size_below_min_size")) return "size_below_min_size";
+        if (lower.includes("fok_insufficient_liquidity")) return "fok_insufficient_liquidity";
+        return null;
+      })();
 
       // ⬅️ manejo específico FOK
       if (lower.includes("fok_insufficient_liquidity")) {
@@ -295,6 +338,23 @@ export default function TakerBox({ market }: Props) {
         setNeedsApproval(false);
         setErr(msg);
         toast.error(msg, { duration: 3000 });
+      } else if (lower.includes("notional_below_min_notional")) {
+        // Parse the structured payload to render a friendlier inline message.
+        let friendly = "Below the market's minimum notional. Increase size and re-quote.";
+        try {
+          const parsed = JSON.parse(raw) as { minNotionalQ?: string };
+          if (parsed?.minNotionalQ && market) {
+            const minHuman = ethers.formatUnits(BigInt(parsed.minNotionalQ), market.quote.decimals);
+            friendly = `Min notional: ${minHuman} ${market.quote.symbol}`;
+          }
+        } catch {
+          // fall through to default copy
+        }
+        setQ(null);
+        setPendingTxData(null);
+        setNeedsApproval(false);
+        setErr(friendly);
+        toast.error(friendly, { duration: 4000 });
       } else {
         const nice = humanizeApiError(e, market, side);
         setQ(null);
@@ -303,6 +363,7 @@ export default function TakerBox({ market }: Props) {
         setErr(nice);
         toast.error(nice, { duration: 4000 });
       }
+      return null;
     } finally {
       setBusy(false);
     }
@@ -315,6 +376,7 @@ export default function TakerBox({ market }: Props) {
     if (!market || !takerToken || !hasAnyTx || needed <= BigInt(0)) return;
 
     setApproving(true);
+    setBusy(true);
     try {
       const signer = await getSigner();
       const { verifyingContract } = await getZeroExDomainFallback();
@@ -325,11 +387,20 @@ export default function TakerBox({ market }: Props) {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
       setApproving(false);
+      setBusy(false);
     }
   }
 
   // -------- Paso 3: EXECUTE --------
-  async function onExecute() {
+  // Phase 4.x-b: `onExecute` accepts an optional `onSubmitted` callback. It
+  // fires exactly once with `sent.hash` immediately after broadcast and
+  // BEFORE `await sent.wait()`. CMR uses this to post
+  // /sea/intents/:id/executing with the bearer executionToken so the
+  // intent state updates while the FillWatcher races to reconcile.
+  // Normal Market mode passes no callback → behaviour is byte-identical
+  // to the pre-4.x-b code path. Callback throws are caught + logged; the
+  // receipt / /match/apply flow is unaffected.
+  async function onExecute(options?: { onSubmitted?: (txHash: string) => void | Promise<void> }) {
     const txList = q?.txList as TxData[] | undefined;
     const hasAnyTx = Boolean(q?.txData || (Array.isArray(txList) && txList.length > 0));
     if (!hasAnyTx) {
@@ -339,11 +410,27 @@ export default function TakerBox({ market }: Props) {
 
     setBusy(true);
     setErr(null);
+    // Lifted to function scope so the catch path can detect partial multi-fill
+    // and refresh the UI for whatever already landed on-chain.
+    let lastHash: string | undefined;
+    let executedTxs = 0;
+    let submittedNotified = false;
+    const notifySubmitted = async (txHash: string) => {
+      if (submittedNotified) return;
+      submittedNotified = true;
+      if (!options?.onSubmitted) return;
+      try {
+        await options.onSubmitted(txHash);
+      } catch (e) {
+        // Never break the receipt/match-apply flow on a callback error.
+
+        console.warn("[useMarketOrder] onSubmitted threw", e);
+      }
+    };
+    const totalPlannedTxs = q?.txData ? 1 : Array.isArray(txList) ? txList.length : 0;
     try {
       const signer = await getSigner();
       if (!market) throw new Error("Market not available");
-
-      let lastHash: string | undefined;
 
       if (q?.txData) {
         // Single
@@ -352,18 +439,27 @@ export default function TakerBox({ market }: Props) {
           data: (q.txData as TxData).data,
           value: BigInt((q.txData as TxData).value ?? "0"),
         });
+        // Fire the optional submitted callback BEFORE awaiting the receipt
+        // so SEA's marker endpoint can post `READY → EXECUTING` while the
+        // FillWatcher races to reconcile the fill.
+        await notifySubmitted(sent.hash);
         const rec = await sent.wait();
         lastHash = rec?.hash ?? sent.hash;
+        executedTxs = 1;
       } else if (Array.isArray(txList) && txList.length > 0) {
-        // Multi: secuencial
+        // Multi: secuencial. CMR's FE guard refuses multi-tx Execute, so
+        // the callback only fires for the first hash if a non-CMR caller
+        // somehow set onSubmitted on a multi-tx plan.
         for (const txd of txList) {
           const sent = await signer.sendTransaction({
             to: txd.to,
             data: txd.data,
             value: BigInt(txd.value ?? "0"),
           });
+          await notifySubmitted(sent.hash);
           const rec = await sent.wait();
           lastHash = rec?.hash ?? sent.hash;
+          executedTxs++;
         }
       }
 
@@ -373,8 +469,13 @@ export default function TakerBox({ market }: Props) {
         txHash: lastHash,
         txData: q?.txData as TxData | undefined,
       });
+      // Tell the backend about the fills we just settled on-chain so the
+      // orderbook / trades / orders reflect reality fast (the watcher would
+      // also pick them up, but with a per-tick delay or — for batch txs —
+      // not at all). Errors here are surfaced (not swallowed) so the user
+      // and the console see the failure instead of a permanently stale UI.
+      let applyOk = false;
       try {
-        // Si el backend devolvió fills y tú ya ejecutaste la/las tx(s), “aplica”
         const fillsForApply = Array.isArray(q?.fills)
           ? q!.fills.map((f: any) => ({
               orderHash: String(f.makerOrderHash),
@@ -384,18 +485,56 @@ export default function TakerBox({ market }: Props) {
 
         if (market && fillsForApply.length > 0) {
           const base = process.env.NEXT_PUBLIC_API_BASE_URL!;
-          await fetch(`${base}/match/apply`, {
+          const res = await fetch(`${base}/match/apply`, {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ marketId: market.symbol, fills: fillsForApply }),
           });
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            const msg = `/match/apply failed: HTTP ${res.status}${body ? ` — ${body.slice(0, 200)}` : ""}`;
+            console.error("[useMarketOrder]", msg);
+            toast.error(
+              "Trade settled on-chain but the backend did not record it. Refresh in a few seconds; if state is still stale, the on-chain watcher likely missed the fill.",
+              { duration: 6000 },
+            );
+          } else {
+            applyOk = true;
+          }
+        } else {
+          // No fills to apply: nothing to call. Treat as ok so we don't double-warn.
+          applyOk = true;
         }
-      } catch {
-        // si falla, no bloquea la UX; el watcher lo acabará aplicando
+      } catch (e) {
+        console.error("[useMarketOrder] /match/apply network error:", e);
+        toast.error(
+          "Could not reach the backend to record the fill. The on-chain watcher may catch up shortly.",
+          { duration: 6000 },
+        );
       }
 
-      // Refresca UI
+      // Refresca UI inmediatamente, y otra vez tras un breve margen para
+      // dar tiempo al watcher on-chain (tick ~2 s) a aplicar el fill cuando
+      // /match/apply sea no-op (DEV_ONCHAIN_WATCHER=1).
       window.dispatchEvent(new CustomEvent("ste:refresh"));
+      if (!applyOk) {
+        // Earlier (and longer) catch-up window when /match/apply did not confirm.
+        setTimeout(() => window.dispatchEvent(new CustomEvent("ste:refresh")), 1500);
+        setTimeout(() => window.dispatchEvent(new CustomEvent("ste:refresh")), 4500);
+      } else {
+        setTimeout(() => window.dispatchEvent(new CustomEvent("ste:refresh")), 3000);
+      }
+
+      // Clear the consumed plan so the user cannot accidentally re-fire the same
+      // tx(s) against a now-empty maker order. `result` (with txHash + explorer link)
+      // is preserved so the success summary stays visible.
+      setQ(null);
+      setNeedsApproval(false);
+      setNeeded(BigInt(0));
+      setTakerToken(null);
+      setTakerFee(BigInt(0));
+      setFeeRecipient(null);
+      setPendingTxData(null);
 
       toast.success(
         (Array.isArray(txList) && txList.length > 0
@@ -404,16 +543,35 @@ export default function TakerBox({ market }: Props) {
         { duration: 3500 },
       );
     } catch (e) {
-      const nice = humanizeApiError(e, market, side);
+      // Partial multi-fill: at least one tx already mined on-chain. Refresh the
+      // page so orderbook/trades/balances reflect reality, and clear the plan so
+      // the user cannot re-fire txs that are already partially consumed. Do NOT
+      // populate `result.fills` — we cannot know precisely how many maker fills
+      // landed without re-reading on-chain state.
+      if (executedTxs > 0) {
+        window.dispatchEvent(new CustomEvent("ste:refresh"));
+        setQ(null);
+        setNeedsApproval(false);
+        setNeeded(BigInt(0));
+        setTakerToken(null);
+        setTakerFee(BigInt(0));
+        setFeeRecipient(null);
+        setPendingTxData(null);
+      }
+      const baseMsg = humanizeApiError(e, market, side);
+      const nice =
+        executedTxs > 0
+          ? `${baseMsg} (${executedTxs}/${totalPlannedTxs} transactions confirmed before failure — re-quote before retrying.)`
+          : baseMsg;
       setErr(nice);
-      toast.error(nice, { duration: 4000 });
+      toast.error(nice, { duration: 5000 });
     } finally {
       setBusy(false);
     }
   }
 
   // Preflight gas (opcional)
-  async function preflightGas(res: Result | null) {
+  async function preflightGas(res: MarketOrderResult | null) {
     try {
       const signer = await getSigner();
       const me = await signer.getAddress();
@@ -492,7 +650,7 @@ export default function TakerBox({ market }: Props) {
   async function onCheckGas() {
     const txList = q?.txList as TxData[] | undefined;
     if (q?.txData || (Array.isArray(txList) && txList.length > 0)) {
-      const tmp: Result = {
+      const tmp: MarketOrderResult = {
         fills: q?.fills?.length ?? 0,
         hasTx: Boolean(q?.txData || txList?.length),
         txData: q?.txData as TxData | undefined,
@@ -508,10 +666,61 @@ export default function TakerBox({ market }: Props) {
         side,
         sizeBase,
         ...(tif === "FOK" ? { tif: "FOK" as Tif } : {}),
+        ...(limitPriceTicks ? { limitPriceTicks } : {}),
       })) as MatchQuoteWithTx;
-      const tmp: Result = {
+
+      const freshTxList = fresh.txList as TxData[] | undefined;
+      const freshHasAnyTx = Boolean(
+        fresh.txData || (Array.isArray(freshTxList) && freshTxList.length > 0),
+      );
+
+      // Empty book / no-liquidity path: surface a clear human message and
+      // do NOT pollute hook state with an empty plan. Mirrors onQuote's
+      // messaging so users get the same experience from either entry point.
+      if (!freshHasAnyTx) {
+        const fillsArr = Array.isArray(fresh?.fills) ? fresh.fills : [];
+        const availableBase = fillsArr.reduce((acc, f) => {
+          const sv =
+            typeof f?.sizeBase === "string"
+              ? f.sizeBase
+              : String((f as unknown as { sizeBase?: unknown })?.sizeBase ?? "0");
+          let v = BigInt(0);
+          try {
+            v = BigInt(sv);
+          } catch {}
+          return acc + v;
+        }, BigInt(0));
+        const requested = (() => {
+          try {
+            return BigInt(sizeBase);
+          } catch {
+            return BigInt(0);
+          }
+        })();
+
+        let msg: string;
+        if (availableBase === BigInt(0)) {
+          msg = `There’s no liquidity available right now on the other side.`;
+        } else if (availableBase < requested) {
+          const humanAvail = (() => {
+            try {
+              return ethers.formatUnits(availableBase, market.base.decimals);
+            } catch {
+              return availableBase.toString();
+            }
+          })();
+          msg = `There isn’t enough liquidity for that size. Currently available: ${humanAvail} ${market.base.symbol}.`;
+        } else {
+          msg = "Couldn’t build the transaction for this quote.";
+        }
+        setErr(msg);
+        toast.error(msg, { duration: 4000 });
+        return;
+      }
+
+      const tmp: MarketOrderResult = {
         fills: fresh.fills?.length ?? 0,
-        hasTx: Boolean(fresh.txData || fresh.txList?.length),
+        hasTx: true,
         txData: fresh.txData as TxData | undefined,
       };
       setQ(fresh);
@@ -529,287 +738,33 @@ export default function TakerBox({ market }: Props) {
     }
   }
 
-  // UI
   const txList = q?.txList as TxData[] | undefined;
   const hasAnyTx = Boolean(q?.txData || (Array.isArray(txList) && txList.length > 0));
 
-  return (
-    <div className="space-y-4">
-      {/* BUY / SELL + pequeño selector de TIF (IOC / FOK) */}
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <Segmented
-          value={side}
-          onChange={(v) => setSide(v)}
-          options={[
-            { label: "BUY", value: "BUY" },
-            { label: "SELL", value: "SELL" },
-          ]}
-          className="shadow-sm"
-        />
-        <select
-          className="rounded-full border border-neutral-700 bg-neutral-900/80 px-2 py-1 text-[11px] text-neutral-300 focus:outline-none focus:ring-1 focus:ring-sky-400/70"
-          value={tif}
-          onChange={(e) => setTif(e.target.value as Tif)}
-        >
-          <option value="IOC">IOC</option>
-          <option value="FOK">FOK</option>
-        </select>
-      </div>
-
-      {/* Size input, mismo criterio que Maker */}
-      <div className="space-y-1">
-        <label className="block text-xs font-medium text-neutral-300">
-          Size ({market?.base.symbol})
-        </label>
-        <Input
-          value={sizeHuman}
-          inputMode="decimal"
-          pattern="[0-9]*[.,]?[0-9]*"
-          placeholder="0.00"
-          className="font-mono"
-          onChange={(e) =>
-            setSizeHuman(sanitizeDecimal(e.target.value, market?.base.decimals ?? 18, true))
-          }
-        />
-      </div>
-
-      {/* Botonera: Quote → Approve → Execute */}
-      <div className="grid grid-cols-3 gap-2 text-sm">
-        <button
-          disabled={!market || busy}
-          onClick={() => {
-            if (readOnly) {
-              toast.message("Read-only mode");
-              return;
-            }
-            void onQuote();
-          }}
-          className="rounded-md border border-neutral-700 bg-neutral-900/70 px-3 py-2 text-neutral-100 hover:bg-neutral-800/80 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {busy ? "…" : "Quote"}
-        </button>
-
-        <button
-          disabled={!hasAnyTx || !needsApproval || busy}
-          onClick={onApprove}
-          className="rounded-md border border-amber-500/60 bg-amber-500/10 px-3 py-2 text-amber-100 hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Approve
-        </button>
-
-        <button
-          disabled={!hasAnyTx || needsApproval || busy}
-          onClick={onExecute}
-          className={cn(
-            "rounded-md px-3 py-2 text-white disabled:cursor-not-allowed disabled:opacity-50",
-            side === "BUY"
-              ? "bg-emerald-500/10 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/20"
-              : "bg-rose-500/10 text-rose-300 border border-rose-500/40 hover:bg-rose-500/20",
-          )}
-        >
-          Execute
-        </button>
-      </div>
-
-      {/* Hint de estado del quote/allowance */}
-      {q?.txData && market && (
-        <div className="text-xs text-neutral-400">
-          {needsApproval ? (
-            <>
-              Need approval for{" "}
-              <b>
-                {ethers.formatUnits(
-                  needed,
-                  side === "BUY" ? market.quote.decimals : market.base.decimals,
-                )}{" "}
-                {side === "BUY" ? market.quote.symbol : market.base.symbol}
-              </b>
-              {takerFee > BigInt(0) && (
-                <>
-                  <br />
-                  Includes fee{" "}
-                  <b>
-                    {ethers.formatUnits(
-                      takerFee,
-                      side === "BUY" ? market.quote.decimals : market.base.decimals,
-                    )}{" "}
-                    {side === "BUY" ? market.quote.symbol : market.base.symbol}
-                  </b>
-                  {feeRecipient && (
-                    <>
-                      {" "}
-                      to <span className="font-mono">{short(feeRecipient)}</span>
-                    </>
-                  )}
-                </>
-              )}
-            </>
-          ) : (
-            <>
-              <span className="text-emerald-400">Allowance OK —</span> total spend{" "}
-              <b>
-                {ethers.formatUnits(
-                  needed,
-                  side === "BUY" ? market.quote.decimals : market.base.decimals,
-                )}{" "}
-                {side === "BUY" ? market.quote.symbol : market.base.symbol}
-              </b>
-              {takerFee > BigInt(0) && (
-                <>
-                  {" "}
-                  (includes fee{" "}
-                  {ethers.formatUnits(
-                    takerFee,
-                    side === "BUY" ? market.quote.decimals : market.base.decimals,
-                  )}
-                  )
-                </>
-              )}
-            </>
-          )}
-        </div>
-      )}
-
-      <button
-        disabled={busy}
-        onClick={() => {
-          if (readOnly) {
-            toast.message("Read-only mode");
-            return;
-          }
-          void onCheckGas();
-        }}
-        className="w-full rounded-md border border-neutral-700 bg-neutral-900/70 px-3 py-2 text-xs text-neutral-200 hover:bg-neutral-800/80 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        Check Gas / Balance
-      </button>
-
-      {err && (
-        <div className="rounded-md border border-rose-500/40 bg-rose-500/10 p-2 text-sm text-rose-200">
-          {err}
-        </div>
-      )}
-
-      {result && (
-        <div className="space-y-1 text-xs text-neutral-300">
-          <div>
-            Fills: <b>{result.fills}</b>
-          </div>
-          <div>
-            Tx sent: <b>{result.hasTx ? "yes" : "no"}</b>
-          </div>
-          {result.txHash && (
-            <div className="break-all">
-              txHash: {result.txHash}
-              <div>
-                <a
-                  href={`${explorerTxBase}${result.txHash}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline text-sky-300 hover:text-sky-200"
-                >
-                  View on {chainLabel} explorer
-                </a>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-      {(() => {
-        const { bps, pct, recipientShort } = getFeeInfo();
-        return (
-          <p className="text-xs text-neutral-500">
-            {bps > 0
-              ? `Reminder: market takers pay a ${pct}% fee encoded as takerTokenFeeAmount. The fee is charged in the taker token and sent to ${recipientShort}. If your trade doesn't meet the platform's fee policy, execution will be rejected.`
-              : `Reminder: in this demo the taker fee is 0%.`}
-          </p>
-        );
-      })()}
-    </div>
-  );
-}
-
-export function PlaceLimitButton({
-  market,
-  side,
-  sizeHuman,
-  priceHuman,
-  onPlace,
-}: {
-  market: Market | null;
-  side: "BUY" | "SELL";
-  sizeHuman: string;
-  priceHuman: string;
-  onPlace: (opts?: { postOnly?: boolean }) => Promise<void>;
-}) {
-  const [postOnly, setPostOnly] = useState(false);
-  if (!market) {
-    return (
-      <button
-        className="w-full rounded-md py-2 px-3 opacity-50 cursor-not-allowed"
-        disabled
-        type="button"
-      >
-        Place Limit
-      </button>
-    );
-  }
-
-  const valid = validateLimitInput(market, sizeHuman, priceHuman);
-  const disabled = !valid.ok;
-  const intent =
-    side === "BUY"
-      ? "bg-emerald-500/10 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/20"
-      : "bg-rose-500/10 text-rose-300 border border-rose-500/40 hover:bg-rose-500/20";
-
-  return (
-    <div className="space-y-1.5">
-      <button
-        type="button"
-        className={`w-full rounded-lg py-2.5 px-3 text-sm font-semibold tracking-wide transition ${
-          disabled
-            ? "bg-neutral-800 text-neutral-500 border border-neutral-700 cursor-not-allowed"
-            : intent
-        }`}
-        disabled={disabled}
-        onClick={async () => {
-          const v = validateLimitInput(market, sizeHuman, priceHuman);
-          if (!v.ok) {
-            v.errors.forEach((e) => toast.error(e));
-            return;
-          }
-          try {
-            await onPlace({ postOnly });
-          } catch (e) {
-            toast.error(e instanceof Error ? e.message : String(e));
-          }
-        }}
-      >
-        Place Limit
-      </button>
-      {/* ⬇️ NUEVO: toggle Post only */}
-      <div className="flex items-center justify-between text-[11px] text-neutral-500">
-        <label className="inline-flex items-center gap-1 cursor-pointer">
-          <input
-            type="checkbox"
-            className="h-3 w-3 rounded border-neutral-600 bg-neutral-900 text-emerald-500 focus:ring-emerald-500"
-            checked={postOnly}
-            onChange={(e) => setPostOnly(e.target.checked)}
-          />
-          <span>Post only (don&apos;t cross)</span>
-        </label>
-      </div>
-      {/* Small print (dynamic) */}
-      {(() => {
-        const { bps, pct, recipientShort } = getFeeInfo();
-        return (
-          <p className="text-xs text-neutral-500">
-            {bps > 0
-              ? `Reminder: takers pay a ${pct}% fee (takerTokenFeeAmount), charged in the taker token and sent to ${recipientShort}. If your order doesn’t meet the fee policy, it will be rejected.`
-              : `Reminder: in this demo the taker fee is 0%.`}
-          </p>
-        );
-      })()}
-    </div>
-  );
+  return {
+    // state
+    q,
+    result,
+    err,
+    busy,
+    needsApproval,
+    needed,
+    takerToken,
+    takerFee,
+    feeRecipient,
+    // derived
+    hasAnyTx,
+    txList,
+    chainLabel,
+    explorerTxBase,
+    // actions
+    onQuote,
+    onApprove,
+    onExecute,
+    onCheckGas,
+    // Phase 5 Part B.2: synchronous read of the latest /match/quote failure
+    // classification. Returns null when the last quote succeeded or when no
+    // quote has been requested yet.
+    getLastQuoteFailureCode: () => lastFailureCodeRef.current,
+  };
 }

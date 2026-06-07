@@ -7,6 +7,9 @@ export type QuoteRequest = {
   side: Side;
   sizeBase: string; // en unidades base raw (string)
   tif?: Tif; // opcional: 'IOC' | 'FOK'
+  // Optional taker price cap (in ticks). Used by marketable-limit routing
+  // so the matcher only includes fills at-or-better than the caller's limit.
+  limitPriceTicks?: string;
 };
 
 export type QuoteResponse = {

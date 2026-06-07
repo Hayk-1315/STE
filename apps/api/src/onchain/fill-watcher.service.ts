@@ -13,6 +13,13 @@ import { OrderBookService } from '../matching/orderbook.service';
 import { PersistenceRepository } from '../matching/persistence.repository';
 import type { ZeroExConfig } from '../zeroex/zeroex.config';
 
+// Phase 4.x-c CMR reconciler: only used to mark a SEA CMR intent
+// EXECUTED / FAILED when the on-chain fill / revert hits an EXECUTING row
+// with `linkedTxHash + marketId + owner` all matching.
+import { IntentRepository } from '../sea/intent.repository';
+import { IntentEventRepository } from '../sea/intent-event.repository';
+import { IntentEventType } from '@prisma/client';
+
 // --- FS helpers para “catch-up” de bloques ---
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve as pathResolve } from 'node:path';
@@ -42,6 +49,11 @@ function saveCursor(file: string, height: number): void {
     /* ignore */
   }
 }
+
+// Stale-cursor warning threshold. Tuned so a quick dev restart stays silent while
+// a long downtime (overnight, weekend) emits a clear, actionable warning.
+// 500 blocks ≈ 17 min on a 2 s chain (Base) and ≈ 100 min on a 12 s chain (Sepolia).
+const STALE_CURSOR_BLOCK_THRESHOLD = 500;
 
 // --------- ABI mínimo: fillLimitOrder((...), (sig...), uint128 takerFill) ----------
 const EP_MIN_ABI = [
@@ -125,6 +137,9 @@ export class FillWatcherService implements OnModuleInit, OnModuleDestroy {
     private readonly repo: PersistenceRepository,
     private readonly metrics: MetricsService,
     @Inject('ZEROEX_CONFIG') cfg: ZeroExConfig,
+    // Phase 4.x-c: SEA CMR execution reconciler dependencies.
+    private readonly intentRepo: IntentRepository,
+    private readonly intentEvents: IntentEventRepository,
   ) {
     this.enabled = (process.env.DEV_ONCHAIN_WATCHER ?? '') === '1';
 
@@ -156,7 +171,19 @@ export class FillWatcherService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const latest = await this.provider.getBlockNumber();
+    let latest: number;
+    try {
+      latest = await this.provider.getBlockNumber();
+    } catch (e) {
+      // Diagnostic: previously this throw silently crashed the lifecycle hook
+      // and the timer never started, leaving the system without on-chain
+      // reconciliation but with no visible error. Make the failure observable
+      // and bail out cleanly without scheduling the tick loop.
+      this.log.error(
+        `boot_failed reason="${e instanceof Error ? e.message : String(e)}" — fill reconciliation will NOT run`,
+      );
+      return;
+    }
     const persisted = loadCursor(this.cursorFile);
 
     if (persisted && persisted <= latest) {
@@ -168,7 +195,24 @@ export class FillWatcherService implements OnModuleInit, OnModuleDestroy {
       saveCursor(this.cursorFile, this.lastScanned);
     }
 
-    this.log.log(`started at block ${this.lastScanned}`);
+    this.log.log(
+      `started cursor=${this.lastScanned} latest=${latest} cursor_source=${persisted && persisted <= latest ? 'persisted' : 'fresh'}`,
+    );
+
+    // Stale-cursor guard: if the persisted cursor is far behind head, the watcher
+    // will spend many ticks catching up before it can reconcile new fills in real
+    // time. Combined with any RPC flakiness on the catch-up window, fills can be
+    // missed silently — exactly the bug we just diagnosed. We do not auto-reset
+    // (that would mask legitimate downtime catch-up); we surface the condition
+    // with concrete guidance so a developer can decide.
+    const lag = latest - this.lastScanned;
+    if (lag > STALE_CURSOR_BLOCK_THRESHOLD) {
+      this.log.warn(
+        `cursor_stale lag=${lag} blocks behind latest=${latest}. ` +
+          `Catch-up will delay on-chain reconciliation and may miss fills if RPC drops blocks. ` +
+          `Delete ${this.cursorFile} and restart to resume fresh near head.`,
+      );
+    }
     this.log.log(
       `boot: ep=${this.addr.resolve().exchangeProxy.toLowerCase()} selector=${this.fillSelector}`,
     );
@@ -225,6 +269,11 @@ export class FillWatcherService implements OnModuleInit, OnModuleDestroy {
         typeof raw !== 'object' ||
         !Array.isArray((raw as { transactions?: unknown }).transactions)
       ) {
+        // Diagnostic: previously this silently `continue`d. If RPC is rate-limiting
+        // or returning non-standard payloads, we now see which block was skipped.
+        this.log.warn(
+          `block_skipped block=${b} reason=missing_or_invalid_transactions`,
+        );
         continue;
       }
 
@@ -257,6 +306,14 @@ export class FillWatcherService implements OnModuleInit, OnModuleDestroy {
             : ('0x' as const);
 
         if (!dataHex.startsWith(this.fillSelector)) continue;
+
+        // Diagnostic: a candidate is a tx to the EP whose calldata starts with
+        // the fillLimitOrder selector. This is the single most important log
+        // line for proving "did the watcher see the user's tx?" — log BEFORE
+        // any decode/lookup work so even a downstream failure leaves a trace.
+        this.log.log(
+          `fill_candidate block=${b} tx=${hash || 'nohash'} from=${(typeof tx.from === 'string' ? tx.from : 'unknown').toLowerCase()}`,
+        );
 
         try {
           const decodedUnknown: unknown = this.iface.decodeFunctionData(
@@ -332,13 +389,90 @@ export class FillWatcherService implements OnModuleInit, OnModuleDestroy {
               ? (tx.from as `0x${string}`)
               : ZERO_ADDR;
 
+          // 0) Phase 4.x-c safety (Option A — global revert guard).
+          //    Before any maker-side mutation, check the on-chain receipt
+          //    status for this candidate. Pre-Phase-4.x the watcher would
+          //    blindly create a Trade row and apply the fill based on the
+          //    calldata selector alone; that is wrong when the tx actually
+          //    reverted. RPC failures / null receipts fall through to the
+          //    existing path (fail-open) so a degraded provider does not
+          //    stall reconciliation. One extra getTransactionReceipt per
+          //    fillLimitOrder candidate — bounded, no architecture change.
+          let revertedReceipt = false;
+          if (hash) {
+            try {
+              const r = await this.provider.getTransactionReceipt(hash);
+              if (r && (r as { status?: number | null }).status === 0) {
+                revertedReceipt = true;
+              }
+            } catch {
+              // unknown — proceed with normal path
+            }
+          }
+
+          if (revertedReceipt) {
+            this.log.warn(
+              `reverted_fill skipped maker-side reconciliation block=${b} tx=${hash}`,
+            );
+            // SEA reconciler: ONLY transition a matching EXECUTING CMR
+            // intent. The (txHash, marketId, owner) match guarantees we
+            // never touch unrelated intents (Blocker 4). Trade is NOT
+            // written; LOB / Order.remainingBase are NOT mutated.
+            if (hash) {
+              try {
+                const hit = await this.intentRepo.findExecutingByTxHashForOwner(
+                  {
+                    txHash: hash.toLowerCase(),
+                    marketId: m.id,
+                    owner: takerAddr.toLowerCase(),
+                  },
+                );
+                if (hit) {
+                  const ok = await this.intentRepo.markFailedFromExecuting(
+                    hit.id,
+                    hash.toLowerCase(),
+                    'tx_reverted',
+                  );
+                  if (ok) {
+                    await this.intentEvents.append(
+                      hit.id,
+                      IntentEventType.FAILED,
+                      {
+                        reason: 'tx_reverted',
+                        txHash: hash.toLowerCase(),
+                      },
+                    );
+                    this.log.warn(
+                      `sea/cmr reconciled FAILED(tx_reverted) intent=${hit.id} tx=${hash}`,
+                    );
+                  }
+                }
+              } catch (e) {
+                // Reconciler errors must NEVER bubble out of the tick.
+                this.log.warn(
+                  `sea/cmr reconciler error tx=${hash}: ${
+                    e instanceof Error ? e.message : String(e)
+                  }`,
+                );
+              }
+            }
+            this.seen.add(dkey);
+            continue; // do NOT call addTrade / applyExternalFill
+          }
+
           // 1) registra trade (para Recent trades)
+          // Phase 4.x-a: forward the source tx hash into Trade.txHash so SEA's
+          // CMR reconciliation (Phase 4.x-c) can link a Trade back to the
+          // intent by linkedTxHash in O(1). `hash` is the empty string only
+          // when the RPC payload was malformed (logged above); addTrade
+          // collapses any non-conformant input to NULL.
           await this.repo.addTrade(
             ctx.id,
             orderHash,
             takerAddr.toLowerCase(),
             priceTicks,
             execBase,
+            hash || undefined,
           );
 
           // 2) reconcilia remaining en LOB + BD
@@ -352,6 +486,45 @@ export class FillWatcherService implements OnModuleInit, OnModuleDestroy {
           this.log.log(
             `on-chain fill reconciled → ${res.status} ${orderHash} sizeBase=${execBase.toString()}`,
           );
+
+          // 3) Phase 4.x-c: SEA CMR reconciler — successful fill path. The
+          //    reverted path is handled upstream by the receipt pre-check;
+          //    if we reach here the tx succeeded on-chain.
+          if (hash) {
+            try {
+              const hit = await this.intentRepo.findExecutingByTxHashForOwner({
+                txHash: hash.toLowerCase(),
+                marketId: m.id,
+                owner: takerAddr.toLowerCase(),
+              });
+              if (hit) {
+                const ok = await this.intentRepo.markExecuted(
+                  hit.id,
+                  hash.toLowerCase(),
+                );
+                if (ok) {
+                  await this.intentEvents.append(
+                    hit.id,
+                    IntentEventType.EXECUTED,
+                    {
+                      txHash: hash.toLowerCase(),
+                      orderHash,
+                      sizeBase: execBase.toString(),
+                    },
+                  );
+                  this.log.log(
+                    `sea/cmr reconciled EXECUTED intent=${hit.id} tx=${hash}`,
+                  );
+                }
+              }
+            } catch (e) {
+              this.log.warn(
+                `sea/cmr reconciler error tx=${hash}: ${
+                  e instanceof Error ? e.message : String(e)
+                }`,
+              );
+            }
+          }
 
           // marca dedup SOLO tras éxito
           this.seen.add(dkey);

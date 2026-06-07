@@ -1,4 +1,4 @@
-// apps/web/src/components/MakerHints.tsx
+// apps/web/src/components/LimitHints.tsx
 "use client";
 
 import React from "react";
@@ -8,7 +8,7 @@ import { cn } from "@/lib/cn";
 
 // Tipo local (ligero) compatible con tu validateLimitInput()
 // Evita depender de un export que no existe ahora en "@/lib/validation"
-type MakerValidationLite = {
+type LimitValidationLite = {
   ok: boolean;
   errors: string[];
   derived?: {
@@ -24,14 +24,20 @@ function toBig(v: unknown): bigint {
   return BigInt(0);
 }
 
-export default function MakerHints({
+export default function LimitHints({
   market,
-  makerValidation,
+  validation,
   tickHuman,
+  crossing,
 }: {
   market: Market;
-  makerValidation: MakerValidationLite;
+  validation: LimitValidationLite;
   tickHuman: string;
+  // Optional advisory: whether the entered price crosses the current top-of-book
+  // and whether post-only is on. Drives a small chip so the user knows up front
+  // that a post-only order will be rejected, or that a non-post-only one will
+  // be routed as taker.
+  crossing?: { wouldCross: boolean; postOnly: boolean };
 }) {
   if (!market) return null;
 
@@ -42,8 +48,8 @@ export default function MakerHints({
   const minNotionalHuman = ethers.formatUnits(BigInt(market.rules.minNotionalQ), qDec);
 
   // Derivados → calcula notional en quote si hay datos
-  const baseWei = toBig(makerValidation?.derived?.baseWei);
-  const priceTicks = toBig(makerValidation?.derived?.priceTicks);
+  const baseWei = toBig(validation?.derived?.baseWei);
+  const priceTicks = toBig(validation?.derived?.priceTicks);
   const tickQ = BigInt(market.rules.priceTickQ);
   const priceScaled = priceTicks * (tickQ || BigInt(1));
 
@@ -53,7 +59,7 @@ export default function MakerHints({
       : null;
 
   // Errores para color de chips
-  const errs: string[] = Array.isArray(makerValidation?.errors) ? makerValidation.errors : [];
+  const errs: string[] = Array.isArray(validation?.errors) ? validation.errors : [];
   const tickBad = errs.some((e) => /tick/i.test(e));
   const minSizeBad = errs.some((e) => /min size/i.test(e));
   const minNotionalBad = errs.some((e) => /notional/i.test(e));
@@ -80,6 +86,20 @@ export default function MakerHints({
           label={`Min notional ≥ ${minNotionalHuman} ${market.quote.symbol}`}
           bad={minNotionalBad}
         />
+        {crossing?.wouldCross && (
+          <span
+            className={cn(
+              "inline-block text-[11px] px-2 py-0.5 rounded-full border",
+              crossing.postOnly
+                ? "bg-rose-50 border-rose-200 text-rose-700"
+                : "bg-amber-50 border-amber-200 text-amber-700",
+            )}
+          >
+            {crossing.postOnly
+              ? "Crosses book · post-only will reject"
+              : "Crosses book · will execute as taker"}
+          </span>
+        )}
         {!tickBad && !minSizeBad && !minNotionalBad && (
           <span className="flex items-center gap-1 text-emerald-300">
             <span>✓</span>
@@ -94,7 +114,7 @@ export default function MakerHints({
         </div>
       )}
 
-      {!makerValidation.ok && errs.length > 0 && (
+      {!validation.ok && errs.length > 0 && (
         <ul className="ml-4 list-disc space-y-0.5 text-rose-300">
           {errs.map((e, i) => (
             <li key={i}>{e}</li>

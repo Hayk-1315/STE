@@ -21,6 +21,9 @@ import { ShadowChecksService } from '../observability/shadow-checks.service';
     HealthController,
   ],
   providers: [PublicWsGateway, CancelWatcherService, ShadowChecksService],
-  exports: [PublicWsGateway],
+  // ShadowChecksService is consumed by OrdersPlacementService in MatchingModule
+  // (Phase 3 extraction) — export so the forwardRef-imported MatchingModule
+  // can inject it.
+  exports: [PublicWsGateway, ShadowChecksService],
 })
 export class PublicModule {}

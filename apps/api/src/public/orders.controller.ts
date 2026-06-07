@@ -6,8 +6,9 @@ import {
   ForbiddenException,
   Post,
 } from '@nestjs/common';
-import { OrderBookService, Side } from '../matching/orderbook.service';
+import { OrderBookService } from '../matching/orderbook.service';
 import { PersistenceRepository } from '../matching/persistence.repository';
+import { OrdersPlacementService } from '../matching/orders-placement.service';
 import { ZeroExSigningService } from '../zeroex/signing.service';
 import type { LimitOrder, Signature } from '../zeroex/limit-order.types';
 import { SignatureType } from '../zeroex/limit-order.types';
@@ -17,8 +18,6 @@ import {
   recoverAddress,
   keccak256,
   toUtf8Bytes,
-  JsonRpcProvider,
-  Contract,
 } from 'ethers';
 import { ZeroExTxBuildersService } from '../zeroex/tx-builders.service';
 import { MetricsService } from '../observability/metrics.service';
@@ -58,19 +57,6 @@ function parseSigHexToTuple(
   return { signatureType, v, r, s } as Signature;
 }
 
-// normaliza firma hex de 65 bytes → `0x${string}` o undefined
-function toHexSig65(v: unknown): `0x${string}` | undefined {
-  if (typeof v !== 'string') return undefined;
-  const hex = v.startsWith('0x') ? v.slice(2) : v;
-  return /^[0-9a-fA-F]{130}$/.test(hex) ? `0x${hex}` : undefined;
-}
-
-const pow10 = (n: number) => {
-  let r = 1n;
-  for (let i = 0; i < n; i++) r *= 10n;
-  return r;
-};
-
 const toLower = (s: string) => s.trim().toLowerCase();
 
 const getChainIdFromEnv = (): number => {
@@ -101,10 +87,6 @@ function hasGetRaw(x: unknown): x is OrderBookWithGetRaw {
   );
 }
 
-/** ⬇️ NUEVO: política de fees (opcional) leída de ENV */
-const FEE_BPS = Number(process.env.TAKER_FEE_BPS || '0'); // ej. 10 = 0.10%
-const FEE_RECIPIENT = (process.env.TAKER_FEE_RECIPIENT || '').toLowerCase();
-
 @Controller()
 export class OrdersController {
   constructor(
@@ -114,6 +96,7 @@ export class OrdersController {
     private readonly txBuilders: ZeroExTxBuildersService,
     private readonly metrics: MetricsService,
     private readonly shadowChecks: ShadowChecksService,
+    private readonly placement: OrdersPlacementService,
   ) {}
 
   /**
@@ -201,176 +184,29 @@ export class OrdersController {
       }
     }
 
-    /** ⬇️ NUEVO: Validación mínima de política de taker fee (si está configurada) */
-    if (FEE_BPS > 0 || FEE_RECIPIENT) {
-      const feeRecipient = toLower((order.feeRecipient as string) || '');
-      const takerAmt = BigInt(order.takerAmount ?? '0');
-      const gotFee = BigInt(order.takerTokenFeeAmount ?? '0');
-      const expectedMinFee =
-        FEE_BPS > 0 ? (takerAmt * BigInt(FEE_BPS)) / 10000n : 0n;
-
-      if (FEE_RECIPIENT && feeRecipient !== FEE_RECIPIENT) {
-        throw new BadRequestException('invalid_fee_recipient');
-      }
-      if (FEE_BPS > 0 && gotFee < expectedMinFee) {
-        throw new BadRequestException('taker_fee_too_low_for_policy');
-      }
-    }
-    /** ⬆️ FIN cambios fee */
-
-    // 2) Resolve market by token pair (makerToken/takerToken)
-    const makerToken = toLower(order.makerToken);
-    const takerToken = toLower(order.takerToken);
-
-    const markets = await this.repo.listMarketsBasic(); // { id, symbol, baseAddress, quoteAddress }
-    const market = markets.find((m) => {
-      const base = toLower(m.baseAddress);
-      const quote = toLower(m.quoteAddress);
-      return (
-        (base === makerToken && quote === takerToken) ||
-        (base === takerToken && quote === makerToken)
-      );
-    });
-
-    if (!market) {
-      throw new BadRequestException('market_not_found_for_tokens');
-    }
-
-    const ctx = await this.repo.getTradingContext(market.id);
-
-    // 3) Derive side, sizeBase, priceTicks from maker/taker amounts
-    const makerAmt = BigInt(order.makerAmount);
-    const takerAmt = BigInt(order.takerAmount);
-
-    let side: Side;
-    let sizeBase: bigint;
-    let priceTicks: bigint;
-
-    const baseAddr = ctx.baseAddress;
-    const quoteAddr = ctx.quoteAddress;
-
-    const isMakerBase = baseAddr === makerToken && quoteAddr === takerToken;
-
-    if (isMakerBase) {
-      // SELL base: maker pays base, receives quote
-      side = 'SELL';
-      sizeBase = makerAmt;
-
-      // price per 1 base = quote/base = takerAmt / makerAmt
-      // priceTicks = (price * 10^quoteDecimals) / priceTickQ
-      //            = (takerAmt * 10^quoteDecimals) / (makerAmt * priceTickQ)
-      // priceTicks * priceTickQ = (takerAmt * 10^baseDecimals) / makerAmt
-      const num = takerAmt * pow10(ctx.baseDecimals);
-      const den = makerAmt * ctx.priceTickQ;
-      priceTicks = num / den;
-      if (num % den !== 0n) {
-        throw new BadRequestException('price_tick_violation');
-      }
-    } else {
-      // BUY base: maker pays quote, receives base
-      side = 'BUY';
-      sizeBase = takerAmt;
-
-      // price per 1 base = quote/base = makerAmt / takerAmt
-      // priceTicks * priceTickQ = (makerAmt * 10^baseDecimals) / takerAmt
-      const num = makerAmt * pow10(ctx.baseDecimals);
-      const den = takerAmt * ctx.priceTickQ;
-      priceTicks = num / den;
-      if (num % den !== 0n) {
-        throw new BadRequestException('price_tick_violation');
-      }
-    }
-    // --- Maker free-balance guard (mínimo intrusivo) ---
-    const openBase = await this.repo.sumOpenBaseByMakerSymbol(
-      makerExpected,
-      market.symbol,
-    );
-
-    const rpc = process.env.RPC_URL_READONLY ?? process.env.RPC_URL;
-    if (!rpc) {
-      // Si faltase el RPC, no tiramos el server; solo avisamos y seguimos (modo dev)
-      console.warn(
-        '[orders] balance guard skipped: missing RPC_URL(_READONLY)',
-      );
-    } else {
-      const provider = new JsonRpcProvider(rpc);
-      const erc20 = new Contract(
-        ctx.baseAddress,
-        ['function balanceOf(address) view returns (uint256)'],
-        provider,
-      );
-
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-      const onchain: bigint = await erc20.balanceOf(makerExpected);
-
-      if (openBase + sizeBase > onchain) {
-        throw new BadRequestException('maker_insufficient_free_balance');
-      }
-    }
-
-    // ⬇️ NUEVO: shadow check de balance/allowance del maker (read-only, opcionalmente blocking)
-    const shadow = await this.shadowChecks.checkMakerFunds({
-      makerToken: order.makerToken,
-      makerAmount: order.makerAmount,
-      maker: order.maker,
-    });
-
-    if (!shadow.ok && this.shadowChecks.isBlocking) {
-      throw new BadRequestException(
-        `shadow_check_failed: ${shadow.warnings.join(' | ')}`,
-      );
-    }
-
-    // ...después de calcular side, priceTicks, sizeBase...
-    const postOnly = Boolean(body?.postOnly);
-
-    // top-of-book para cruzar
-    const snap = this.ob.snapshot(market.symbol, 1);
-    const bestBid = snap.bids[0]?.priceTicks
-      ? BigInt(snap.bids[0].priceTicks)
-      : null;
-    const bestAsk = snap.asks[0]?.priceTicks
-      ? BigInt(snap.asks[0].priceTicks)
-      : null;
-
-    // ¿cruza?
-    const wouldCross =
-      side === 'BUY'
-        ? bestAsk !== null && priceTicks >= bestAsk
-        : bestBid !== null && priceTicks <= bestBid;
-
-    if (postOnly && wouldCross) {
-      throw new BadRequestException('post_only_would_cross');
-    }
-
-    // 4) Place into in-memory book keyed by symbol; persistence is handled inside OrderBookService
-    const res = await this.ob.place({
-      marketId: market.symbol,
+    // Phase 3 extraction: post-EIP-712 logic (fee policy, market resolution,
+    // side/size/price derivation, balance guard, shadow check, postOnly
+    // crossing check, ob.place, attachRaw, metrics) lives in
+    // OrdersPlacementService and is shared with the SEA fire path.
+    // POST /orders behavior is bit-identical (same throw codes, same response).
+    return this.placement.place({
+      order,
+      signature:
+        typeof (signature as unknown) === 'string'
+          ? parseSigHexToTuple(
+              signature as unknown as string,
+              SignatureType.EIP712,
+            )
+          : (() => {
+              const s = signature;
+              const vv = s.v === 0 || s.v === 1 ? s.v + 27 : s.v;
+              return { ...s, v: vv };
+            })(),
       orderHash,
-      maker: makerExpected,
-      side,
-      priceTicks,
-      sizeBase,
+      makerExpected,
+      postOnly: Boolean(body?.postOnly),
+      source: 'orders',
     });
-    await this.ob.attachRaw(market.symbol, orderHash, { order, signature });
-
-    try {
-      const sigHex = toHexSig65(signature);
-      await this.repo.attachRawToOrder({
-        orderHash,
-        order,
-        signature: sigHex, // <- sin any, tipado estricto
-      });
-    } catch (e) {
-      console.warn(
-        '[orders] attachRawToOrder failed:',
-        e instanceof Error ? e.message : String(e),
-      );
-    }
-    if (this.metrics && typeof this.metrics.ordersPlaced?.inc === 'function') {
-      this.metrics.ordersPlaced.inc();
-    }
-    return { ok: true, orderHash, status: res.status };
   }
 
   /**
