@@ -51,7 +51,7 @@
     "@nestjs/schedule": "6.0.1",
     "@web3auth/modal": "10.16.0",
     "ethers": "6.15.0",
-    "next": "16.0.1",
+    "next": "16.0.10",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "ts-node": "^10.9.2"
