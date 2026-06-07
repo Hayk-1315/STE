@@ -23,17 +23,6 @@ import { ShadowChecksService } from '../observability/shadow-checks.service';
 import { MetricsService } from '../observability/metrics.service';
 import { signatureToTuple } from './raw-order.util';
 
-const FEE_BPS = Number(process.env.TAKER_FEE_BPS || '0');
-// Canonical taker-fee recipient is FEE_RECIPIENT (used by zeroex.config.ts and set
-// in every profile). TAKER_FEE_RECIPIENT kept as an optional override. Without this
-// fallback the recipient-match check below stays dormant, so the configured fee
-// recipient is never enforced.
-const FEE_RECIPIENT = (
-  process.env.TAKER_FEE_RECIPIENT ||
-  process.env.FEE_RECIPIENT ||
-  ''
-).toLowerCase();
-
 const pow10 = (n: number): bigint => {
   let r = 1n;
   for (let i = 0; i < n; i++) r *= 10n;
@@ -90,18 +79,29 @@ export class OrdersPlacementService {
       throw new BadRequestException('invalid_signature_for_persistence');
     }
 
-    /** Validación mínima de política de taker fee (si está configurada) */
-    if (FEE_BPS > 0 || FEE_RECIPIENT) {
+    /** Validación mínima de política de taker fee (si está configurada).
+     * Read at call time (not module load) so the policy reflects the current
+     * env in every runtime, including tests that adjust it after import.
+     * Canonical recipient: TAKER_FEE_RECIPIENT falls back to FEE_RECIPIENT
+     * (used by zeroex.config.ts, set in every profile). */
+    const feeBps = Number(process.env.TAKER_FEE_BPS || '0');
+    const feeRecipientPolicy = (
+      process.env.TAKER_FEE_RECIPIENT ||
+      process.env.FEE_RECIPIENT ||
+      ''
+    ).toLowerCase();
+
+    if (feeBps > 0 || feeRecipientPolicy) {
       const feeRecipient = toLower((order.feeRecipient as string) || '');
       const takerAmt = BigInt(order.takerAmount ?? '0');
       const gotFee = BigInt(order.takerTokenFeeAmount ?? '0');
       const expectedMinFee =
-        FEE_BPS > 0 ? (takerAmt * BigInt(FEE_BPS)) / 10000n : 0n;
+        feeBps > 0 ? (takerAmt * BigInt(feeBps)) / 10000n : 0n;
 
-      if (FEE_RECIPIENT && feeRecipient !== FEE_RECIPIENT) {
+      if (feeRecipientPolicy && feeRecipient !== feeRecipientPolicy) {
         throw new BadRequestException('invalid_fee_recipient');
       }
-      if (FEE_BPS > 0 && gotFee < expectedMinFee) {
+      if (feeBps > 0 && gotFee < expectedMinFee) {
         throw new BadRequestException('taker_fee_too_low_for_policy');
       }
     }

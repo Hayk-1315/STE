@@ -148,6 +148,13 @@ function buildService(opts?: {
   // doesn't try to call a real provider. (See OrdersPlacementService line ~155.)
   delete process.env.RPC_URL;
   delete process.env.RPC_URL_READONLY;
+  // Taker-fee policy guard must stay dormant for these DB-free placement tests.
+  // @prisma/client (imported transitively) auto-loads apps/api/.env, which sets
+  // FEE_RECIPIENT / TAKER_FEE_BPS; clear them so the guard does not reject the
+  // ZERO-recipient test orders. Same ambient-env neutralization as RPC_URL above.
+  delete process.env.FEE_RECIPIENT;
+  delete process.env.TAKER_FEE_RECIPIENT;
+  delete process.env.TAKER_FEE_BPS;
 
   const svc = new OrdersPlacementService(
     ob as unknown as OrderBookService,
