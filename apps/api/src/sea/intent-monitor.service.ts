@@ -22,6 +22,7 @@ import { IntentRepository } from './intent.repository';
 import { IntentFireService, type FireableIntent } from './intent-fire.service';
 import { CmrPrepareService } from './cmr-prepare.service';
 import { IntentEventRepository } from './intent-event.repository';
+import { CMR_EXECUTING_MARK_GRACE_SEC } from './intent.service';
 import {
   IntentEventType,
   TriggerType,
@@ -234,10 +235,16 @@ export class IntentMonitorService
         }
 
         // (2) walletLock guard — blocks READY → ACTIVE re-arm during the
-        //     pre-tx wallet-lock window only. Never gates hard expiry above.
+        //     pre-tx wallet-lock window AND the marker grace, so the monitor
+        //     cannot steal the row from a fill the user just confirmed slightly
+        //     after expiry (the marker accepts it within
+        //     CMR_EXECUTING_MARK_GRACE_SEC — see IntentService.markExecuting).
+        //     Never gates hard expiry above.
         if (
           intent.walletLockUntilAt &&
-          intent.walletLockUntilAt.getTime() > now
+          intent.walletLockUntilAt.getTime() +
+            CMR_EXECUTING_MARK_GRACE_SEC * 1000 >
+            now
         ) {
           continue;
         }

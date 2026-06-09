@@ -59,6 +59,7 @@ export type FreshQuoteReason =
   | "trigger_no_longer_satisfied"
   | "insufficient_liquidity"
   | "notional_below_min_notional"
+  | "requires_single_fill"
   | `intent_not_ready:${IntentStatus}`;
 
 export type FreshQuoteOk = {

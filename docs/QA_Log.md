@@ -70,3 +70,26 @@ Concise record of what has been manually exercised, what is known-flaky, and wha
 ## Validation tooling
 
 - No dedicated markdown lint script exists in `package.json` — `pnpm format` / `pnpm format:check` runs Prettier across `**/*.md` via the root config. No new tooling added.
+
+## 2026-06-09 — CMR readiness & execution hardening
+
+### Fixed / verified
+
+- [x] Local Sepolia CMR ACTIVE→READY fixed (root cause: `PROFILE=mainnet` leaking via `main.ts` dotenv; fix: `PROFILE=sepolia` in `.env.sepolia`). Verified live: monitor boots `cmr=on`, the trigger-3000 CMR flipped READY.
+- [x] Wallet-lock authorization with >5s signing delay fixed (signed proposal is the source of truth; bounds + signature-against-supplied). Unit-covered; manual sign-delay path passed.
+- [x] Wallet-lock idempotency: same lock → same token; different live lock → rejected. Unit-covered.
+- [x] CMR v1 single-fill READY gate (prepare + freshQuote). Manual QA of the split-book case (stays ACTIVE) and single-order case (READY) passed; unit-covered.
+- [x] CMR stale-window mitigation (FE 60s pre-send buffer + backend 45s marker grace + monitor re-arm block). Unit-covered (grace within/beyond, re-armed stale token, monitor block).
+
+### Automated validation (latest run)
+
+- `pnpm --filter api test -- sea` → 12 suites, 183 tests pass.
+- `pnpm --filter api typecheck` / `lint` → clean.
+- `pnpm --filter api test` → 22 suites, 292 tests pass.
+- `pnpm --filter web typecheck` → clean; `pnpm --filter web lint` → 0 errors (6 pre-existing warnings in `api.ts`/`salt.ts`); `pnpm --filter web build` → success.
+- `pnpm format:check` → all files match Prettier.
+
+### Residual limitation (manual verification scope)
+
+- If the user leaves the tx wallet modal open for many minutes beyond `walletLockUntilAt + 45s` then confirms, the fill can land on-chain while intent bookkeeping does not reconcile (marker rejects; FillWatcher links only EXECUTING). Funds are correct; intent may show ACTIVE/EXPIRED. Mitigations: watcher consumes the maker order (blunts double-fill); the FE message directs the user to verify wallet/chain activity. Full fix deferred (would need a pre-send EXECUTING state). Manual QA only (cannot be automated without a wallet/browser harness).
+- No web test harness in `apps/web`; the FE pre-send guard and friendly error copy rely on typecheck/lint/build + manual QA.

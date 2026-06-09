@@ -48,6 +48,31 @@ type Props = {
   onAfterAction?: () => void;
 };
 
+// A-improved: map known SEA/CMR backend error codes (and raw JSON error
+// bodies) to friendly, action-oriented copy. Unknown errors fall back to the
+// backend `message` field when the body is JSON, else a humanized version of
+// the raw string. Pure string→string; safe for both fresh-quote reason codes
+// and thrown Error.message JSON blobs.
+function friendlySeaError(raw: string): string {
+  const s = (raw || "").toLowerCase();
+  if (s.includes("wallet_lock_expired"))
+    return "Confirmation window expired. Wait for the intent to re-arm and try again.";
+  if (s.includes("wallet_lock_until_mismatch") || s.includes("lock_nonce_mismatch"))
+    return "Couldn't authorize execution (stale lock). Please retry.";
+  if (s.includes("ready_ttl_expired"))
+    return "This alert re-armed while you waited. It'll be ready again shortly.";
+  if (s.includes("requires_single_fill"))
+    return "Not executable as a single order right now (split liquidity). Waiting for a single-order match.";
+  let base = raw || "Something went wrong.";
+  try {
+    const parsed = JSON.parse(raw) as { message?: unknown };
+    if (typeof parsed?.message === "string") base = parsed.message;
+  } catch {
+    // not JSON — fall through to humanized raw
+  }
+  return base.replace(/_/g, " ");
+}
+
 export default function ReadyIntentRowActions({ intent, market, readOnly, onAfterAction }: Props) {
   // Convert atomic sizeBase → human via formatUnits (no JS float division).
   const sizeHuman = (() => {
@@ -80,6 +105,10 @@ export default function ReadyIntentRowActions({ intent, market, readOnly, onAfte
   // Phase 4.x-b: bearer token held in component state between wallet-lock
   // and /executing. Cleared on stage reset.
   const [executionToken, setExecutionToken] = useState<string | null>(null);
+  // A-improved: the accepted wallet-lock expiry (ISO). Used by the pre-send
+  // buffer to refuse opening the wallet when the confirmation window is
+  // closing. Cleared at the start of each orchestrate().
+  const [walletLockUntilAt, setWalletLockUntilAt] = useState<string | null>(null);
 
   const ttlExpired = (() => {
     if (!intent.preparedQuoteAt) return false;
@@ -97,15 +126,15 @@ export default function ReadyIntentRowActions({ intent, market, readOnly, onAfte
     setReason(null);
     setStage("validating");
     setExecutionToken(null);
+    setWalletLockUntilAt(null);
     try {
       // Step 1: fresh-quote (server-side state + trigger + guard preview).
       const fr = await getFreshQuote(intent.id);
       if (!fr.ok) {
+        const friendly = friendlySeaError(fr.reason);
         setStage("error");
-        setReason(fr.reason);
-        toast.error(`Cannot execute: ${fr.reason.replace(/_/g, " ")}`, {
-          duration: 5000,
-        });
+        setReason(friendly);
+        toast.error(friendly, { duration: 5000 });
         onAfterAction?.();
         return;
       }
@@ -146,10 +175,14 @@ export default function ReadyIntentRowActions({ intent, market, readOnly, onAfte
           walletLockUntilAt: fr.walletLockProposal.walletLockUntilAt,
         });
         setExecutionToken(lockRes.executionToken);
+        // Prefer the canonical value the backend stored; fall back to the
+        // signed proposal if the response omitted it.
+        setWalletLockUntilAt(lockRes.walletLockUntilAt ?? fr.walletLockProposal.walletLockUntilAt);
       } catch (e) {
+        const friendly = friendlySeaError(e instanceof Error ? e.message : "wallet_lock_failed");
         setStage("error");
-        setReason(e instanceof Error ? e.message : "wallet_lock_failed");
-        toast.error("Could not authorise execution. Please retry.", { duration: 5000 });
+        setReason(friendly);
+        toast.error(friendly, { duration: 5000 });
         onAfterAction?.();
         return;
       }
@@ -252,6 +285,26 @@ export default function ReadyIntentRowActions({ intent, market, readOnly, onAfte
 
   const onConfirmClick = async () => {
     if (readOnly) return;
+    // A-improved pre-send buffer: do NOT open the tx wallet if the wallet-lock
+    // window is expired or within 60s of expiring. This stops the user
+    // broadcasting a fill the backend marker would refuse to record once the
+    // lock lapses while the modal is open (the marker allows only a short grace
+    // past walletLockUntilAt). The 60s FE buffer is larger than that grace, so
+    // a passed check leaves ample room for the marker to land in-window.
+    // NOTE: this cannot cover dwell *inside* the wallet modal (the FE regains
+    // control only after the user confirms) — that residual is handled by the
+    // backend marker grace and documented as a known limitation.
+    const remainingMs = walletLockUntilAt ? Date.parse(walletLockUntilAt) - Date.now() : Number.NaN;
+    if (!Number.isFinite(remainingMs) || remainingMs <= 60_000) {
+      setStage("error");
+      setReason("Confirmation window closing");
+      toast.error(
+        "Confirmation window expired or almost expired — please wait for the intent to re-arm and try again.",
+        { duration: 6000 },
+      );
+      onAfterAction?.();
+      return;
+    }
     // Phase 4.x-b: pass onSubmitted callback so the marker POST fires
     // immediately after broadcast, BEFORE awaiting the receipt.
     // executionToken was minted during orchestrate(); if missing the FE
@@ -264,11 +317,12 @@ export default function ReadyIntentRowActions({ intent, market, readOnly, onAfte
         try {
           await postIntentExecuting(intent.id, txHash, token);
         } catch (e) {
-          // Non-blocking: the tx is on-chain; we toast but do not throw.
-
+          // Non-blocking: the tx MAY be on-chain; we toast but do not throw.
+          // Do NOT promise watcher reconciliation — if the marker failed with
+          // wallet_lock_expired the watcher (EXECUTING-only) will not link it.
           console.warn("[ReadyIntentRowActions] /executing POST failed", e);
           toast.error(
-            "Trade submitted but SEA could not record the link. Tx will reconcile via watcher if it lands.",
+            "Transaction may have been submitted. Check your wallet activity and refresh the intent status.",
             { duration: 6000 },
           );
         }

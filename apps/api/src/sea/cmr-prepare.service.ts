@@ -213,8 +213,33 @@ export class CmrPrepareService {
       return;
     }
 
-    // 3c. Full-fill capacity AND notional ≥ min. Build the informational
-    //     snapshot and atomically transition ACTIVE → READY.
+    // 3b-bis. CMR v1 executes a SINGLE market-fill tx. A within-trigger
+    //   aggregate fill that spans more than one maker order (fills.length > 1)
+    //   is not executable on the v1 path — the FE refuses split/multi-tx with
+    //   `multi_tx_not_supported`. Marking such an intent READY would advertise
+    //   an execution that then fails, so require a single fill here. Same
+    //   debounced-PROGRESS pattern as the branches above; stay ACTIVE and do
+    //   NOT create any wallet-lock / execution-readiness state.
+    if (quote.fills.length !== 1) {
+      const debounceSec = this.resolveProgressDebounceSec();
+      const cooldownUntilAt = new Date(Date.now() + debounceSec * 1000);
+      const stamped = await this.repo.setActiveCooldown(
+        intent.id,
+        cooldownUntilAt,
+      );
+      if (stamped) {
+        await this.events.append(intent.id, IntentEventType.PROGRESS, {
+          reason: 'requires_single_fill',
+          fills: quote.fills.length,
+          debounceSec,
+        });
+      }
+      return;
+    }
+
+    // 3c. Full-fill capacity AND notional ≥ min AND single-fill executable.
+    //     Build the informational snapshot and atomically transition
+    //     ACTIVE → READY.
     const preparedAt = new Date();
     const ttlSec = this.resolveTtlSec();
     const snapshot = buildPreparedQuoteSnapshot(quote, preparedAt, ttlSec);

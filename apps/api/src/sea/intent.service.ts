@@ -235,21 +235,53 @@ export class IntentService {
       throw new BadRequestException('lock_nonce_mismatch');
     }
 
-    // (3) Server-side walletLockUntilAt (clamped to hard expiry — Blocker 1).
+    // (3) Validate the FE-supplied walletLockUntilAt. This value is the one
+    //     GET /fresh-quote proposed and the user signed (EIP-191); it is the
+    //     single source of truth. We do NOT recompute `now + lockSec` and
+    //     require an exact match: the old design compared two independent
+    //     `now + lockSec` mints and rejected the human review+sign delay
+    //     (> 5s) as wallet_lock_until_mismatch. Instead we bounds-check the
+    //     supplied value and NEVER silently clamp it — an out-of-range value
+    //     is rejected so the stored value, the signed value, and the
+    //     executionToken-bound value all stay identical.
+    //       • finite,
+    //       • strictly in the future (lock not already expired),
+    //       • <= intent.expiresAt (hard ceiling — Blocker 1),
+    //       • <= now + (lockSec + grace) so a client cannot reserve the
+    //         intent for an absurd window. `grace` only absorbs clock/network
+    //         jitter; the legitimate proposal is always <= now + lockSec
+    //         because it was minted at or before `now`.
     const lockSecs = getWalletLockSecs();
-    const walletLockUntilAt_server = new Date(
-      Math.min(now + lockSecs * 1000, expiresAtMs),
-    );
+    const suppliedMs = Date.parse(body.ownerAuth.walletLockUntilAt);
+    const maxFutureMs = now + (lockSecs + WALLET_LOCK_SKEW_GRACE_SEC) * 1000;
+    if (
+      !Number.isFinite(suppliedMs) ||
+      suppliedMs <= now ||
+      suppliedMs > expiresAtMs ||
+      suppliedMs > maxFutureMs
+    ) {
+      throw new BadRequestException('wallet_lock_until_mismatch');
+    }
+    const walletLockUntilAt_accepted = new Date(suppliedMs);
 
-    // (4) Idempotency BEFORE the time-skew check (Blocker 1 retry rule).
-    //     If the row is already locked with the same (preparedQuoteAt-bound)
-    //     nonce and the lock window is still live, return the deterministic
-    //     same token.
+    // (4) A live wallet lock is immutable for its window. If the row is
+    //     already locked and that window is still open:
+    //       • same supplied lock-until ISO  → idempotent success: return the
+    //         deterministic same token, no signature re-verify, no re-lock.
+    //       • different supplied lock-until ISO → reject. A second value —
+    //         even one that is in-bounds and validly signed — must NOT
+    //         replace, extend, or re-issue a token against a live lock. This
+    //         runs BEFORE the signature verify and BEFORE lockWalletFromReady,
+    //         so nothing is updated and no new token is minted.
     const executionSecret = requireSecret('SEA_EXECUTION_TOKEN_SECRET');
     if (
       intent.walletLockUntilAt &&
       new Date(intent.walletLockUntilAt).getTime() > now
     ) {
+      const storedIso = new Date(intent.walletLockUntilAt).toISOString();
+      if (body.ownerAuth.walletLockUntilAt !== storedIso) {
+        throw new BadRequestException('wallet_lock_until_mismatch');
+      }
       const existingToken = issueExecutionToken(executionSecret, {
         intentId: intent.id,
         owner: intent.owner,
@@ -257,67 +289,51 @@ export class IntentService {
         walletLockUntilAt: new Date(intent.walletLockUntilAt),
         lockNonce: body.ownerAuth.lockNonce,
       });
-      // Soft-verify the supplied walletLockUntilAt: if the FE re-issues
-      // identical input (same nonce, same lock-until-iso it saw before),
-      // skip-step (5) signature verification (the original POST already
-      // verified). This makes pure retries cheap. If the supplied
-      // walletLockUntilAt differs from what we have stored, fall through.
-      if (
-        body.ownerAuth.walletLockUntilAt ===
-        new Date(intent.walletLockUntilAt).toISOString()
-      ) {
-        return {
-          walletLockUntilAt: new Date(intent.walletLockUntilAt).toISOString(),
-          executionToken: existingToken,
-        };
-      }
+      return {
+        walletLockUntilAt: storedIso,
+        executionToken: existingToken,
+      };
     }
 
-    // (5) Verify EIP-191 signature against the SERVER value.
-    //     Tolerate ~5s skew from the FE-supplied walletLockUntilAt so the
-    //     FE can show a confirm screen between fresh-quote and wallet-lock.
-    const suppliedMs = Date.parse(body.ownerAuth.walletLockUntilAt);
-    if (
-      !Number.isFinite(suppliedMs) ||
-      Math.abs(suppliedMs - walletLockUntilAt_server.getTime()) > 5_000
-    ) {
-      throw new BadRequestException('wallet_lock_until_mismatch');
-    }
+    // (5) Verify the EIP-191 signature against the SUPPLIED value — the exact
+    //     ISO the FE signed — not a server recompute. A signature over any
+    //     other value recovers a different signer and throws
+    //     wallet_lock_auth_failed.
     this.validator.verifyWalletLockAuth({
       intentId: intent.id,
       intentOwner: intent.owner,
       chainId,
       lockNonce: body.ownerAuth.lockNonce,
-      walletLockUntilAtIso: walletLockUntilAt_server.toISOString(),
+      walletLockUntilAtIso: body.ownerAuth.walletLockUntilAt,
       signature: body.ownerAuth.signature,
     });
 
-    // (6) Atomic compound-where UPDATE.
+    // (6) Atomic compound-where UPDATE — store the accepted supplied value.
     const ok = await this.repo.lockWalletFromReady(
       intent.id,
       new Date(intent.preparedQuoteAt),
-      walletLockUntilAt_server,
+      walletLockUntilAt_accepted,
     );
     if (!ok) {
       throw new ConflictException('status_changed_concurrently');
     }
 
-    // (7) Issue executionToken bound to the SERVER lock-until value.
+    // (7) Issue executionToken bound to the SAME accepted lock-until value.
     const token = issueExecutionToken(executionSecret, {
       intentId: intent.id,
       owner: intent.owner,
       chainId,
-      walletLockUntilAt: walletLockUntilAt_server,
+      walletLockUntilAt: walletLockUntilAt_accepted,
       lockNonce: body.ownerAuth.lockNonce,
     });
 
     this.logger.log(
       `sea/wallet-lock id=${intent.id} owner=${intent.owner} ` +
-        `until=${walletLockUntilAt_server.toISOString()}`,
+        `until=${walletLockUntilAt_accepted.toISOString()}`,
     );
 
     return {
-      walletLockUntilAt: walletLockUntilAt_server.toISOString(),
+      walletLockUntilAt: walletLockUntilAt_accepted.toISOString(),
       executionToken: token,
     };
   }
@@ -378,8 +394,16 @@ export class IntentService {
       throw new ConflictException('wallet_lock_expired');
     }
     const lockUntilDate = new Date(intent.walletLockUntilAt);
-    // (4) lock-window guard.
-    if (lockUntilDate.getTime() <= now) {
+    // (4) lock-window guard, with a small marker grace. A fill the user
+    //     confirmed slightly after walletLockUntilAt (wallet-modal dwell)
+    //     should still be recorded so the intent does not diverge from
+    //     on-chain reality. We accept the marker up to
+    //     CMR_EXECUTING_MARK_GRACE_SEC past the lock; nothing else is relaxed —
+    //     walletLockUntilAt is NOT extended, no new token is issued, and the
+    //     token must still verify against the row's CURRENT preparedQuoteAt
+    //     below (so a re-armed row's stale token is rejected). Beyond the grace
+    //     it stays wallet_lock_expired.
+    if (now > lockUntilDate.getTime() + CMR_EXECUTING_MARK_GRACE_SEC * 1000) {
       throw new ConflictException('wallet_lock_expired');
     }
 
@@ -528,6 +552,29 @@ function getWalletLockSecs(): number {
   if (!Number.isFinite(raw) || raw < 30) return 300;
   return Math.min(Math.floor(raw), 3600);
 }
+
+/**
+ * Small tolerance (seconds) added to the maximum accepted wallet-lock window
+ * when bounds-checking the FE-supplied, owner-signed walletLockUntilAt in
+ * `lockWallet`. This is NOT a skew-equality comparison against a recompute —
+ * it only absorbs clock/network jitter at the upper bound. The legitimate
+ * server-proposed value is always <= now + SEA_WALLET_LOCK_SEC because it was
+ * minted at or before `now`.
+ */
+const WALLET_LOCK_SKEW_GRACE_SEC = 10;
+
+/**
+ * Marker grace (seconds) for POST /sea/intents/:id/executing. A fill the user
+ * confirmed slightly AFTER walletLockUntilAt (e.g. they dwelled in the wallet
+ * modal) is still recorded READY→EXECUTING within this window, so the intent
+ * does not diverge from on-chain reality. It does NOT extend the lock, issue a
+ * new token, or relax token verification — the executionToken must still match
+ * the row's CURRENT preparedQuoteAt, so a re-armed row's stale token is
+ * rejected. Shared with IntentMonitorService's re-arm guard so the monitor does
+ * not steal the row during the grace. Beyond it the marker is
+ * `wallet_lock_expired`. Module-local constant by design (no env knob).
+ */
+export const CMR_EXECUTING_MARK_GRACE_SEC = 45;
 
 /**
  * Mirror of `readSecret` from execution-token.util.ts but throws when the

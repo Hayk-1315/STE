@@ -147,9 +147,20 @@ describe('CmrPrepareService.evaluateAndPrepare', () => {
     expect(events.append).not.toHaveBeenCalled();
   });
 
-  it('trigger satisfied + full liquidity → atomic markReady + READY event with informational snapshot', async () => {
+  it('trigger satisfied + full single-fill liquidity → atomic markReady + READY event with informational snapshot', async () => {
     const { svc, repo, events, ob } = buildSvc({
       snap: { asks: [{ priceTicks: '290000' }] }, // 290000 ≤ trigger 300000
+      // CMR v1 requires a SINGLE fill to reach READY.
+      quote: {
+        fills: [
+          {
+            makerOrderHash: '0xfill1',
+            maker: '0xmaker',
+            priceTicks: '290000',
+            sizeBase: '1000000000000000000',
+          },
+        ],
+      },
     });
     await svc.evaluateAndPrepare(buildCandidate());
     // Price guard: quote MUST be called with limitPriceTicks=triggerPriceTicks.
@@ -172,7 +183,7 @@ describe('CmrPrepareService.evaluateAndPrepare', () => {
     // Snapshot must NOT contain rawOrder / rawSig / fills (informational only).
     expect(snapshot.symbol).toBe('WETH-USDC');
     expect(snapshot.remainingBase).toBe('0');
-    expect(snapshot.levelCount).toBe(2);
+    expect(snapshot.levelCount).toBe(1);
     expect(snapshot.topLevelPriceTicks).toBe('290000');
     expect(snapshot.ttlSec).toBe(60);
     expect('fills' in snapshot).toBe(false);
@@ -183,6 +194,28 @@ describe('CmrPrepareService.evaluateAndPrepare', () => {
       IntentEventType.READY,
       expect.objectContaining({ ttlSec: 60 }),
     );
+  });
+
+  it('within-trigger aggregate fill that is split (fills.length > 1) → stays ACTIVE with PROGRESS requires_single_fill, not READY', async () => {
+    // Default mock quote returns remainingBase '0' with TWO fills — the
+    // user-reported book (e.g. 0.1@19 + 0.1@20 under a ≤20 trigger). CMR v1
+    // executes a single tx, so this must NOT reach READY.
+    const { svc, repo, events } = buildSvc({
+      snap: { asks: [{ priceTicks: '290000' }] }, // trigger satisfied
+      // minNotionalQ defaults to 0n → notional passes; we reach the new gate.
+    });
+    await svc.evaluateAndPrepare(buildCandidate());
+    expect(repo.markReady).not.toHaveBeenCalled();
+    expect(repo.setActiveCooldown).toHaveBeenCalledTimes(1);
+    expect(events.append).toHaveBeenCalledWith(
+      'cmr_xyz',
+      IntentEventType.PROGRESS,
+      expect.objectContaining({ reason: 'requires_single_fill', fills: 2 }),
+    );
+    const readyCalls = events.append.mock.calls.filter(
+      (c: unknown[]) => c[1] === IntentEventType.READY,
+    );
+    expect(readyCalls.length).toBe(0);
   });
 
   it('price guard prevents READY when deeper levels are worse than the trigger (only top level fillable)', async () => {
@@ -272,6 +305,16 @@ describe('CmrPrepareService.evaluateAndPrepare', () => {
     const { svc, repo, events } = buildSvc({
       snap: { asks: [{ priceTicks: '290000' }] },
       markReadyResult: false,
+      quote: {
+        fills: [
+          {
+            makerOrderHash: '0xfill1',
+            maker: '0xmaker',
+            priceTicks: '290000',
+            sizeBase: '1000000000000000000',
+          },
+        ],
+      },
     });
     await svc.evaluateAndPrepare(buildCandidate());
     expect(repo.markReady).toHaveBeenCalledTimes(1);
@@ -292,6 +335,17 @@ describe('CmrPrepareService.evaluateAndPrepare', () => {
   it('SELL natural combo (PRICE_ABOVE + BEST_BID) reads BEST_BID and guards quote with triggerPriceTicks', async () => {
     const { svc, repo, ob } = buildSvc({
       snap: { bids: [{ priceTicks: '305000' }] }, // 305000 ≥ trigger 300000
+      quote: {
+        side: 'SELL',
+        fills: [
+          {
+            makerOrderHash: '0xfill1',
+            maker: '0xmaker',
+            priceTicks: '305000',
+            sizeBase: '1000000000000000000',
+          },
+        ],
+      },
     });
     await svc.evaluateAndPrepare(
       buildCandidate({
@@ -346,6 +400,16 @@ describe('CmrPrepareService.evaluateAndPrepare', () => {
     const { svc, repo, events } = buildSvc({
       snap: { asks: [{ priceTicks: '290000' }] },
       minNotionalQ: 1n,
+      quote: {
+        fills: [
+          {
+            makerOrderHash: '0xfill1',
+            maker: '0xmaker',
+            priceTicks: '290000',
+            sizeBase: '1000000000000000000',
+          },
+        ],
+      },
     });
     await svc.evaluateAndPrepare(buildCandidate());
     expect(repo.markReady).toHaveBeenCalledTimes(1);

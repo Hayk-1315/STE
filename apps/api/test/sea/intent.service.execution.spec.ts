@@ -261,19 +261,93 @@ describe('IntentService.lockWallet', () => {
     );
   });
 
-  it('rejects walletLockUntilAt > 5s skew from server value', async () => {
+  it('succeeds when the POST arrives >5s after the fresh-quote proposal (no recompute/skew check)', async () => {
+    // Proposal minted ~20s before this POST: (NOW-20s)+300s = NOW+280s.
+    // Under the old design the server recompute (NOW+300s) differed by 20s
+    // (>5s) → wallet_lock_until_mismatch. Now the supplied value is canonical.
+    const proposalUntil = new Date(NOW - 20_000 + 300_000); // NOW + 280_000
+    const { service, repo, validator } = buildService();
+    const out = await service.lockWallet(
+      INTENT_ID,
+      buildOwnerAuth({ walletLockUntilAt: proposalUntil.toISOString() }),
+    );
+    // Stored value == accepted supplied value (NOT a server recompute).
+    expect(out.walletLockUntilAt).toBe(proposalUntil.toISOString());
+    expect(repo.lockWalletFromReady).toHaveBeenCalledWith(
+      INTENT_ID,
+      READY_PREPARED_AT,
+      proposalUntil,
+    );
+    // Signature verified against the SUPPLIED iso, not a recompute.
+    expect(validator.verifyWalletLockAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        walletLockUntilAtIso: proposalUntil.toISOString(),
+      }),
+    );
+    // executionToken verifies against the stored accepted value.
+    expect(out.executionToken).toBe(deriveExecutionToken(proposalUntil));
+  });
+
+  it('rejects supplied walletLockUntilAt <= now with wallet_lock_until_mismatch', async () => {
     const { service } = buildService();
-    const skewed = new Date(NOW + 300_000 + 10_000).toISOString();
+    const past = new Date(NOW).toISOString(); // not strictly in the future
     await expect(
       service.lockWallet(
         INTENT_ID,
-        buildOwnerAuth({ walletLockUntilAt: skewed }),
+        buildOwnerAuth({ walletLockUntilAt: past }),
       ),
     ).rejects.toThrow(/wallet_lock_until_mismatch/);
   });
 
-  it('clamps walletLockUntilAt to intent.expiresAt (Blocker 1)', async () => {
-    // Hard expiry only 60s out; SEA_WALLET_LOCK_SEC=300.
+  it('rejects supplied walletLockUntilAt beyond now + lockSec + grace', async () => {
+    const { service } = buildService();
+    // lockSec=300, grace=10 → max NOW+310_000. NOW+360_000 is out of range.
+    const tooFar = new Date(NOW + 300_000 + 60_000).toISOString();
+    await expect(
+      service.lockWallet(
+        INTENT_ID,
+        buildOwnerAuth({ walletLockUntilAt: tooFar }),
+      ),
+    ).rejects.toThrow(/wallet_lock_until_mismatch/);
+  });
+
+  it('rejects supplied walletLockUntilAt beyond intent.expiresAt (no silent clamp)', async () => {
+    // Tight expiry so the value exceeds expiresAt before the lockSec window.
+    const tightExpiry = new Date(NOW + 30_000);
+    const { service } = buildService({
+      intent: buildReadyIntent({ expiresAt: tightExpiry.toISOString() }),
+    });
+    const beyond = new Date(NOW + 40_000).toISOString(); // > expiry, < now+lockSec
+    await expect(
+      service.lockWallet(
+        INTENT_ID,
+        buildOwnerAuth({ walletLockUntilAt: beyond }),
+      ),
+    ).rejects.toThrow(/wallet_lock_until_mismatch/);
+  });
+
+  it('rejects tampered walletLockUntilAt: verifier runs against the supplied ISO → wallet_lock_auth_failed', async () => {
+    // The verifier (mocked here; covered for real in intent-validator spec) is
+    // invoked with the SUPPLIED iso. A signature over any other value recovers
+    // a different signer and throws wallet_lock_auth_failed.
+    const { service, validator } = buildService({
+      validatorThrows: new BadRequestException('wallet_lock_auth_failed'),
+    });
+    const supplied = new Date(NOW + 280_000).toISOString();
+    await expect(
+      service.lockWallet(
+        INTENT_ID,
+        buildOwnerAuth({ walletLockUntilAt: supplied }),
+      ),
+    ).rejects.toThrow(/wallet_lock_auth_failed/);
+    expect(validator.verifyWalletLockAuth).toHaveBeenCalledWith(
+      expect.objectContaining({ walletLockUntilAtIso: supplied }),
+    );
+  });
+
+  it('accepts supplied walletLockUntilAt equal to intent.expiresAt (boundary)', async () => {
+    // Hard expiry only 60s out; a proposal capped exactly at expiry is the
+    // boundary case and must be accepted as-is (suppliedMs <= expiresAtMs).
     process.env.SEA_WALLET_LOCK_SEC = '300';
     const tightExpiry = new Date(NOW + 60_000);
     const { service } = buildService({
@@ -304,6 +378,26 @@ describe('IntentService.lockWallet', () => {
       buildOwnerAuth({ walletLockUntilAt: proposalUntil.toISOString() }),
     );
     expect(r2.executionToken).toBe(r1.executionToken);
+    expect(validator.verifyWalletLockAuth).not.toHaveBeenCalled();
+  });
+
+  it('rejects a DIFFERENT in-bounds/signed walletLockUntilAt while a live lock exists (no re-lock, no extend, no new token)', async () => {
+    // Row already holds a live lock at NOW+300s. A second POST with a
+    // different value — even one that is in-bounds and validly signed — must
+    // be rejected outright: it must not overwrite walletLockUntilAt, must not
+    // re-verify the signature, and must not mint a new token.
+    const existing = new Date(NOW + 300_000);
+    const { service, repo, validator } = buildService({
+      intent: buildReadyIntent({ walletLockUntilAt: existing.toISOString() }),
+    });
+    const different = new Date(NOW + 280_000).toISOString(); // in-bounds, != existing
+    await expect(
+      service.lockWallet(
+        INTENT_ID,
+        buildOwnerAuth({ walletLockUntilAt: different }),
+      ),
+    ).rejects.toThrow(/wallet_lock_until_mismatch/);
+    expect(repo.lockWalletFromReady).not.toHaveBeenCalled();
     expect(validator.verifyWalletLockAuth).not.toHaveBeenCalled();
   });
 
@@ -413,16 +507,45 @@ describe('IntentService.markExecuting', () => {
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
-  it('rejects with wallet_lock_expired when lockUntil < now', async () => {
+  it('rejects with wallet_lock_expired when now is beyond walletLockUntilAt + grace', async () => {
+    const lockUntil = new Date(NOW - 60_000); // 60s past expiry — beyond the 45s grace
     const { service } = buildService({
-      intent: lockedIntent({
-        walletLockUntilAt: new Date(NOW - 1000).toISOString(),
-      }),
+      intent: lockedIntent({ walletLockUntilAt: lockUntil.toISOString() }),
     });
-    const token = deriveExecutionToken(new Date(NOW - 1000));
+    const token = deriveExecutionToken(lockUntil);
     await expect(
       service.markExecuting(INTENT_ID, { txHash: TX, executionToken: token }),
     ).rejects.toThrow(/wallet_lock_expired/);
+  });
+
+  it('grace: marker within +45s after walletLockUntilAt (valid token, unchanged preparedQuoteAt) → READY→EXECUTING', async () => {
+    const lockUntil = new Date(NOW - 1000); // 1s past expiry — within the 45s marker grace
+    const { service, repo } = buildService({
+      intent: lockedIntent({ walletLockUntilAt: lockUntil.toISOString() }),
+    });
+    const token = deriveExecutionToken(lockUntil);
+    await service.markExecuting(INTENT_ID, {
+      txHash: TX,
+      executionToken: token,
+    });
+    expect(repo.markExecuting).toHaveBeenCalledWith(INTENT_ID, TX);
+  });
+
+  it('grace does NOT rescue a re-armed row: changed preparedQuoteAt invalidates the old token → 401, no transition', async () => {
+    const lockUntil = new Date(NOW - 1000); // within grace, time-wise
+    const newPreparedAt = new Date(READY_PREPARED_AT.getTime() + 5_000); // row re-prepared
+    const { service, repo } = buildService({
+      intent: lockedIntent({
+        walletLockUntilAt: lockUntil.toISOString(),
+        preparedQuoteAt: newPreparedAt.toISOString(),
+      }),
+    });
+    // Token minted against the OLD preparedQuoteAt nonce.
+    const token = deriveExecutionToken(lockUntil);
+    await expect(
+      service.markExecuting(INTENT_ID, { txHash: TX, executionToken: token }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(repo.markExecuting).not.toHaveBeenCalled();
   });
 
   it('idempotency: re-POST on EXECUTING with matching linkedTxHash returns the row', async () => {

@@ -207,6 +207,35 @@ describe('SeaController.freshQuote', () => {
     );
   });
 
+  it('requires_single_fill when the guarded quote spans more than one fill (defense-in-depth for drift)', async () => {
+    // An already-READY row whose book drifted into a split between prepare and
+    // this pre-execute re-check. CMR v1 cannot execute a multi-fill, so the
+    // wallet must not open.
+    const { ctrl } = buildCtrl({
+      intent: buildReadyIntent(),
+      snap: { asks: [{ priceTicks: '290000' }] },
+      quote: {
+        remainingBase: '0',
+        fills: [
+          {
+            makerOrderHash: '0xfill1',
+            maker: '0xm1',
+            priceTicks: '290000',
+            sizeBase: '500000000000000000',
+          },
+          {
+            makerOrderHash: '0xfill2',
+            maker: '0xm2',
+            priceTicks: '295000',
+            sizeBase: '500000000000000000',
+          },
+        ],
+      },
+    });
+    const res = await ctrl.freshQuote('cmr_xyz');
+    expect(res).toEqual({ ok: false, reason: 'requires_single_fill' });
+  });
+
   // --- Phase 5 Part B.3: min-notional gate ---
 
   it('notional_below_min_notional when fills total below ctx.minNotionalQ (no state mutation)', async () => {

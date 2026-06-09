@@ -236,6 +236,19 @@ export class SeaController {
       };
     }
 
+    // CMR v1 executes a SINGLE market-fill tx. A multi-fill quote is not
+    // executable on the v1 path (the FE refuses split/multi-tx with
+    // multi_tx_not_supported). Defense-in-depth: CmrPrepareService already
+    // requires fills.length === 1 before READY, but the book can drift into a
+    // split between prepare and this pre-execute re-check. Gate it here too so
+    // the wallet never opens for a non-executable quote.
+    if (quote.fills.length !== 1) {
+      return {
+        ok: false as const,
+        reason: 'requires_single_fill' as const,
+      };
+    }
+
     // Phase 4.x-b additive fields: issue a stateless lockNonce + propose a
     // server-side walletLockUntilAt so the FE can sign the wallet-lock
     // canonical message immediately. Pure reads — no DB mutation here.

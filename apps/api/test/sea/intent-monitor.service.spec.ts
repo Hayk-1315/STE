@@ -378,7 +378,7 @@ describe('IntentMonitorService', () => {
       expect(repo.rearmFromReady).not.toHaveBeenCalled();
     });
 
-    it('walletLock expired → re-arm proceeds normally when TTL has also passed', async () => {
+    it('walletLock expired beyond grace → re-arm proceeds normally when TTL has also passed', async () => {
       process.env.SEA_CMR_PREPARE_ENABLED = '1';
       const { monitor, repo } = buildMonitor({
         cmrReady: [
@@ -386,12 +386,32 @@ describe('IntentMonitorService', () => {
             id: 'r_unlock',
             preparedQuote: { ttlSec: 60 },
             preparedQuoteAt: new Date(Date.now() - 5 * 60 * 1000),
-            walletLockUntilAt: new Date(Date.now() - 1_000),
+            // 60s past lock expiry — beyond the 45s marker grace.
+            walletLockUntilAt: new Date(Date.now() - 60_000),
           }),
         ],
       });
       await monitor.tick();
       expect(repo.rearmFromReady).toHaveBeenCalledTimes(1);
+    });
+
+    it('walletLock expired but within marker grace → re-arm still blocked (does not steal the row)', async () => {
+      process.env.SEA_CMR_PREPARE_ENABLED = '1';
+      const { monitor, repo, events } = buildMonitor({
+        cmrReady: [
+          buildCmrReadyRow({
+            id: 'r_grace',
+            preparedQuote: { ttlSec: 60 },
+            preparedQuoteAt: new Date(Date.now() - 5 * 60 * 1000),
+            // 1s past lock expiry — still inside the 45s marker grace.
+            walletLockUntilAt: new Date(Date.now() - 1_000),
+          }),
+        ],
+      });
+      await monitor.tick();
+      expect(repo.rearmFromReady).not.toHaveBeenCalled();
+      expect(repo.markExpiredFromReady).not.toHaveBeenCalled();
+      expect(events.append).not.toHaveBeenCalled();
     });
   });
 });
