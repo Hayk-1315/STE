@@ -224,8 +224,17 @@ pnpm db:up
 
 ### 3. Copy env files
 
-    apps/api/.env.example → apps/api/.env
-    apps/web/.env.local.example → apps/web/.env.local
+```
+apps/api/.env.example        → apps/api/.env
+apps/web/.env.local.example  → apps/web/.env.local
+```
+
+Open `apps/api/.env` and replace `YOUR_KEY` in the RPC URL with your Alchemy
+(or other provider) API key.
+
+> Real `.env` files are gitignored and must **not** be committed. They are
+> separate from the environment variables configured in Vercel / Render
+> dashboards.
 
 ### 4. Run API and Web
 
@@ -233,20 +242,63 @@ pnpm db:up
 pnpm dev:stack:base
 ```
 
+This script applies the DB schema, wipes and re-seeds local market data, then
+starts API + Web. The profile is read-only: write actions and watchers are
+disabled.
+
 Open: http://localhost:3000
+
+---
 
 ## Quickstart - Ethereum Sepolia (Interactive)
 
+### Requirements
+
+Same as Base: Node 22, pnpm, Docker Desktop with Postgres running
+(`pnpm db:up`).
+
 ### 1. Copy env files
 
-    apps/api/.env.sepolia.example → apps/api/.env.sepolia
-    apps/web/.env.sepolia.local.example → apps/web/.env.sepolia.local
+```
+apps/api/.env.sepolia.example          → apps/api/.env.sepolia
+apps/web/.env.sepolia.local.example    → apps/web/.env.sepolia.local
+```
 
-### 2. Run API and Web
+### 2. Fill in required values
+
+Open `apps/api/.env.sepolia` and set:
+
+- **`RPC_URL` / `RPC_URL_READONLY`** — replace `YOUR_KEY` with your Alchemy
+  (or other) Sepolia RPC key.
+- **`SEA_LOCK_NONCE_SECRET`** and **`SEA_EXECUTION_TOKEN_SECRET`** — generate
+  two distinct random values (e.g. `openssl rand -base64 32`). Both are required
+  for CMR wallet-lock; without them CMR execution fails at runtime.
+
+The example file already sets `SEA_MONITOR_ENABLED=1`,
+`SEA_CMR_PREPARE_ENABLED=1`, and `DEV_ONCHAIN_WATCHER=1` for the full
+interactive experience. Set `DEV_ONCHAIN_WATCHER=0` if your RPC quota is
+limited and you want to skip on-chain reconciliation.
+
+Open `apps/web/.env.sepolia.local` and set:
+
+- **`NEXT_PUBLIC_RPC_URL`** — same Sepolia RPC key as above.
+- **`NEXT_PUBLIC_WEB3AUTH_CLIENT_ID`** — your Web3Auth client ID from
+  [console.web3auth.io](https://console.web3auth.io). Required for wallet
+  connection; without it no wallet can connect.
+
+> Real `.env` files are gitignored and must **not** be committed. They are
+> separate from the environment variables configured in Vercel / Render
+> dashboards.
+
+### 3. Run API and Web
 
 ```bash
 pnpm dev:stack:sepolia
 ```
+
+This script applies the DB schema, **wipes and re-seeds local market data**,
+then starts API + Web. Smart Intents (CL / CMR) are active once the env values
+above are filled in.
 
 Open: http://localhost:3000
 
