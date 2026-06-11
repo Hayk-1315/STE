@@ -408,4 +408,5 @@ It will not auto-execute, auto-sign, or take custody, and it is not investment a
 
 ## License
 
-MIT
+STE Exchange is licensed under AGPL-3.0-or-later.
+Commercial/private licensing is available on request.

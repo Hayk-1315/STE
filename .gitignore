@@ -19,3 +19,6 @@ grafana-data/
 
 **/dist/
 **/.next/
+
+# Local working-instructions file — not for the public repo
+CLAUDE.md
