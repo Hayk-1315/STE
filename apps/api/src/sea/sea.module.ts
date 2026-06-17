@@ -18,8 +18,11 @@ import { IntentMonitorService } from './intent-monitor.service';
 import { IntentExpirySweeperService } from './intent-expiry-sweeper.service';
 import { IntentExecutingSweeperService } from './intent-executing-sweeper.service';
 import { CmrPrepareService } from './cmr-prepare.service';
+import { AiModule } from './ai/ai.module';
 
 @Module({
+  // Phase 6 (AI Assist): stateless NL parse endpoint, layered on top.
+  imports: [AiModule],
   controllers: [SeaController],
   providers: [
     IntentService,

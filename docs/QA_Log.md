@@ -93,3 +93,26 @@ Concise record of what has been manually exercised, what is known-flaky, and wha
 
 - If the user leaves the tx wallet modal open for many minutes beyond `walletLockUntilAt + 45s` then confirms, the fill can land on-chain while intent bookkeeping does not reconcile (marker rejects; FillWatcher links only EXECUTING). Funds are correct; intent may show ACTIVE/EXPIRED. Mitigations: watcher consumes the maker order (blunts double-fill); the FE message directs the user to verify wallet/chain activity. Full fix deferred (would need a pre-send EXECUTING state). Manual QA only (cannot be automated without a wallet/browser harness).
 - No web test harness in `apps/web`; the FE pre-send guard and friendly error copy rely on typecheck/lint/build + manual QA.
+
+## 2026-06-15 — SEA AI Assist (Phase 1A/1B, behind flags)
+
+### Automated validation (latest run)
+
+- `pnpm --filter api test -- sea` → 15 suites, **226 tests pass**, incl. **43 new AI tests** (schema, deterministic validator, parser/provider boundary) using a **mock provider only — no live AI calls**.
+- `pnpm --filter api typecheck` / `lint` → clean.
+- `pnpm --filter web typecheck` → clean; `pnpm --filter web lint` → 0 errors (6 pre-existing warnings in `api.ts`/`salt.ts`); `pnpm --filter web build` → success.
+- `pnpm format:check` → all files match.
+- Build-time scan: no `anthropic`/API-key string in `apps/web/src` or the built `.next` bundle.
+
+### Audited + fixed
+
+- Stale-metadata guard: `rawText`/`parserMeta` are attached on create **only when the form still matches the applied AI draft** (subMode + market + side + size + trigger + CL limit). Manual edits and CL↔CMR / market switches detach it; manual creates send nothing. Verified by code inspection + web typecheck/build (no web unit-test harness, per project convention).
+
+### Pending manual QA (Sepolia, flags on + real `ANTHROPIC_API_KEY`)
+
+- [ ] CMR/CL: NL → validDraft → Apply → existing Create succeeds; created intent persists `rawText` + `parserMeta` and behaves identically to a manually-formed intent.
+- [ ] "cheap" / "when it drops" → one clarification question (NOT unsupported); RSI / moving averages / news / forecast / portfolio advice → unsupportedIntent.
+- [ ] CL-style text typed in the CMR tab → clarification + switch hint, no auto-switch.
+- [ ] `SEA_AI_ENABLED=0` or missing `ANTHROPIC_API_KEY` → `aiUnavailable`; manual CMR/CL form fully works.
+- [ ] Read-only / mainnet: AI Assist hidden by default; Create disabled as today.
+- [ ] Tick-misaligned / below-min-size / CMR-BUY-too-small → clarification(correction) with the computed fix.

@@ -273,6 +273,11 @@ Open `apps/api/.env.sepolia` and set:
 - **`SEA_LOCK_NONCE_SECRET`** and **`SEA_EXECUTION_TOKEN_SECRET`** — generate
   two distinct random values (e.g. `openssl rand -base64 32`). Both are required
   for CMR wallet-lock; without them CMR execution fails at runtime.
+- **(Optional) `ANTHROPIC_API_KEY`** — only needed to run the AI Assist "Preview
+  intent" locally. Add your own Anthropic key (server-side; the file is
+  gitignored). Without it the AI Assist card shows an "unavailable" state and the
+  manual form works normally. API usage is billed to the key owner. See
+  [AI Assist](#ai-assist-smart-execution-assistant).
 
 The example file already sets `SEA_MONITOR_ENABLED=1`,
 `SEA_CMR_PREPARE_ENABLED=1`, and `DEV_ONCHAIN_WATCHER=1` for the full
@@ -393,16 +398,62 @@ Then:
 
 ---
 
-## Planned: AI/NL Intent Assistant
+## AI Assist (Smart Execution Assistant)
 
-A natural-language layer on top of the deterministic engine is planned, not implemented. The intended behavior:
+A natural-language helper layered on top of the deterministic engine, inside the **Conditional** tab (CMR / CL). It is **behind feature flags and disabled by default**. The LLM is a restricted _extractor_; the deterministic engine stays the source of truth.
 
-- The user types a natural-language intent.
-- The assistant proposes a structured CL or CMR draft.
-- The user reviews and edits the draft before anything is created.
-- Backend validation remains the source of truth.
+**What Phase 1 does**
 
-It will not auto-execute, auto-sign, or take custody, and it is not investment advice.
+- Natural-language input in the Conditional tab for both **Conditional Market Ready (CMR)** and **Conditional Limit (CL)**.
+- Extracts restricted, human-level fields only: **side, size, trigger price**, and **CL limit price** when applicable.
+- Asks a **clarification question** when a required field is missing or vague (e.g. "buy when it's cheap" → asks for a trigger price).
+- Returns **`unsupportedIntent`** for out-of-scope strategies (RSI, moving averages, news, forecasts, portfolio advice).
+- Generates the **summary and explainability copy** (what it means / what it does not guarantee / that you still confirm) from deterministic code.
+- Shows **factual notes** from deterministic rules (e.g. trigger already met; a CL limit that would cross the book; a CMR size below the minimum notional at the trigger price).
+- **Hints** when the text sounds like the other submode (e.g. a passive limit typed in the CMR tab) — it never auto-switches.
+- Fills the existing manual form **only after you click "Apply to form"**; nothing is created automatically.
+
+**What Phase 1 does not do**
+
+- No auto-execution, no signing, no trading authority.
+- No general chatbot, no market or price advice.
+- No database conversation store.
+- No bypassing deterministic validation — the LLM output is never authoritative.
+
+**How it works**
+
+```
+user text
+  → POST /sea/ai/parse
+  → restricted JSON extraction (LLM)
+  → deterministic backend validation (source of truth)
+  → code-generated summary / clarification / unsupported response
+  → Apply to existing form
+  → existing signed create flow
+```
+
+The LLM only extracts **side, size, trigger price, and CL limit price**. Backend code derives the **reference price, trigger type, execution authority, and TIF / enforcement**, runs **tick / min-size / min-notional** checks, and produces **all user-facing copy**. You review, edit, and sign every transaction exactly like a manually-built intent.
+
+**New environment variables**
+
+| Variable                     | Side | Purpose                                                         |
+| ---------------------------- | ---- | --------------------------------------------------------------- |
+| `SEA_AI_ENABLED`             | API  | `1` enables `POST /sea/ai/parse`; `0`/absent → `aiUnavailable`. |
+| `ANTHROPIC_API_KEY`          | API  | Server-side only. Empty ⇒ AI unavailable. Never commit.         |
+| `SEA_AI_MODEL`               | API  | Optional model override; defaults to `claude-haiku-4-5`.        |
+| `NEXT_PUBLIC_SEA_AI_ENABLED` | Web  | `true` shows the AI Assist card.                                |
+
+**Cost** — a real `ANTHROPIC_API_KEY` means **paid Anthropic API usage billed to the key owner**, separate from any claude.ai Pro/Max subscription (a Pro plan does not cover API calls). Each "Preview intent" can make **one** Anthropic call when AI is fully enabled and a key is set.
+
+**By profile**
+
+- **Base mainnet / read-only** — the card is **visible but display-only**: textarea, Preview, and Apply are disabled, the UI never calls `/sea/ai/parse`, and the backend needs no key — so there is **no Anthropic cost**.
+- **Local Sepolia** — optional/live: set `SEA_AI_ENABLED=1` and add your own `ANTHROPIC_API_KEY` to the gitignored `apps/api/.env.sepolia`; API usage is billed to you.
+- **Deployed Sepolia** — `/sea/ai/parse` is unauthenticated and unthrottled, so keep AI **disabled by default** (`SEA_AI_ENABLED=0`). Enable only for controlled QA, then turn it back off (`SEA_AI_ENABLED=0` / clear the key).
+
+**Phase 2 (optional, later)** — may add **deterministic explanations** for existing intents (why one is waiting / ready / rejected / not executable), based only on engine facts. It must **not** add auto-execution, advice, session keys, delegated execution, or chatbot behavior.
+
+It is not investment advice.
 
 ---
 

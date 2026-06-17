@@ -19,6 +19,8 @@ import { sanitizeDecimal } from "@/lib/number";
 import { cn } from "@/lib/cn";
 import { parsePriceScaled, parseSizeWei, validateLimitInput } from "@/lib/validation";
 import type { IntentSide } from "@/lib/sea";
+import ConditionalAiAssist, { type AppliedDraft } from "@/components/ConditionalAiAssist";
+import { isAiAssistEnabled } from "@/lib/seaAi";
 
 /**
  * Phase 5 safety: exact tick-alignment check for a single price field. Reuses
@@ -111,16 +113,20 @@ export default function ConditionalTab({ market, readOnly, onCreated }: Props) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Per Phase 4 CMR restriction: natural combos only. The hint text below
-  // makes this explicit; the form does not let the user choose a non-natural
-  // combo because side determines the reference + comparison.
-  const naturalHint = useMemo(
-    () =>
-      side === "BUY"
-        ? "Buy when best ask falls to ≤ trigger price"
-        : "Sell when best bid rises to ≥ trigger price",
-    [side],
-  );
+  // Phase 6: AI Assist. `aiApplied` records the last applied draft so create
+  // can attach provenance ONLY when the form still matches it (any manual edit
+  // detaches it). `aiEnabled` is independent of readOnly — Apply only fills
+  // inputs; creating still goes through the existing signed flow.
+  const aiEnabled = useMemo(() => isAiAssistEnabled(), []);
+  const [aiApplied, setAiApplied] = useState<AppliedDraft | null>(null);
+
+  const onApplyDraft = (d: AppliedDraft) => {
+    setSide(d.side);
+    setSizeHuman(d.sizeHuman);
+    setTriggerPriceHuman(d.triggerPriceHuman);
+    if (d.limitPriceHuman !== undefined) setLimitPriceHuman(d.limitPriceHuman);
+    setAiApplied(d);
+  };
 
   // Phase 5 safety: per-field validation runs synchronously on every render.
   // No wallet prompt opens while any error is present. CL reuses the existing
@@ -188,6 +194,31 @@ export default function ConditionalTab({ market, readOnly, onCreated }: Props) {
     setBusy(true);
     setErr(null);
     try {
+      // Phase 6: attach AI provenance ONLY if the form still matches the
+      // applied draft (any manual edit detaches it). Additive, non-signing:
+      // rawText + parserMeta flow through the existing create body untouched.
+      const applied = aiApplied;
+      const matches =
+        applied !== null &&
+        applied.subMode === subMode &&
+        applied.marketSymbol === market.symbol &&
+        applied.side === side &&
+        applied.sizeHuman === sizeHuman &&
+        applied.triggerPriceHuman === triggerPriceHuman &&
+        (subMode === "CMR" || applied.limitPriceHuman === limitPriceHuman);
+      const aiMeta =
+        matches && applied
+          ? {
+              rawText: applied.rawText,
+              parserMeta: {
+                source: "ai",
+                model: applied.provenance.model,
+                requestId: applied.provenance.requestId,
+                schemaVersion: 1,
+              },
+            }
+          : {};
+
       if (subMode === "CL") {
         await createCL({
           market,
@@ -196,6 +227,7 @@ export default function ConditionalTab({ market, readOnly, onCreated }: Props) {
           limitPriceHuman,
           triggerPriceHuman,
           expirySec: clExpirySec,
+          ...aiMeta,
         });
       } else {
         const expiresAtUnix = Math.floor(Date.now() / 1000) + cmrExpirySec;
@@ -206,6 +238,7 @@ export default function ConditionalTab({ market, readOnly, onCreated }: Props) {
           triggerPriceHuman,
           tif: cmrTif,
           expiresAtUnix,
+          ...aiMeta,
         });
       }
       onCreated?.();
@@ -231,7 +264,29 @@ export default function ConditionalTab({ market, readOnly, onCreated }: Props) {
         className="shadow-sm"
       />
 
-      <p className="text-[11px] text-neutral-500">{naturalHint}</p>
+      {/* Phase 6: AI Assist (above the manual form). Gated by
+          NEXT_PUBLIC_SEA_AI_ENABLED. A centered bridge line below the submode
+          pills introduces the two ways to create the same intent (AI Assist or
+          the manual form below). Apply only fills the fields below; the existing
+          Create button stays the only create path. Remounts per submode so its
+          state resets when switching CMR/CL. */}
+      {aiEnabled && market && (
+        <>
+          {/* Bridge: the two ways to create the same intent. */}
+          <p className="text-center text-xs font-medium text-neutral-400">
+            {subMode === "CMR"
+              ? "Describe a market-ready alert with AI, or fill the fields manually below."
+              : "Describe a passive limit trigger with AI, or fill the fields manually below."}
+          </p>
+          <ConditionalAiAssist
+            key={subMode}
+            market={market}
+            subMode={subMode}
+            readOnly={readOnly}
+            onApplyDraft={onApplyDraft}
+          />
+        </>
+      )}
 
       {/* Side */}
       <Segmented

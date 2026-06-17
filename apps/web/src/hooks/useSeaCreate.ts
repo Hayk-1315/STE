@@ -58,6 +58,10 @@ export type CreateCLParams = {
   triggerPriceHuman: string;
   /** Intent expiry from now, seconds. Defaults 24h. */
   expirySec?: number;
+  /** Phase 6 (AI Assist): optional NL text, non-signing provenance only. */
+  rawText?: string;
+  /** Phase 6 (AI Assist): optional parser metadata, non-signing provenance only. */
+  parserMeta?: Record<string, unknown>;
 };
 
 export type CreateCMRParams = {
@@ -70,6 +74,10 @@ export type CreateCMRParams = {
   tif?: "IOC" | "FOK";
   /** Absolute expiry, unix seconds. Required for CMR per backend invariant. */
   expiresAtUnix: number;
+  /** Phase 6 (AI Assist): optional NL text, non-signing provenance only. */
+  rawText?: string;
+  /** Phase 6 (AI Assist): optional parser metadata, non-signing provenance only. */
+  parserMeta?: Record<string, unknown>;
 };
 
 function priceHumanToTicks(market: Market, priceHuman: string): bigint {
@@ -187,6 +195,10 @@ export function useSeaCreate() {
         zeroExOrder: order,
         signature: signaturePayload,
         preSignedOrderHash: digest,
+        // Phase 6 (AI Assist): optional provenance. Not part of any signed
+        // payload (the 0x order signature is unchanged); pure pass-through.
+        ...(p.rawText ? { rawText: p.rawText } : {}),
+        ...(p.parserMeta ? { parserMeta: p.parserMeta } : {}),
       };
 
       const intent = await createIntent(body);
@@ -256,6 +268,10 @@ export function useSeaCreate() {
         owner: address,
         structuredIntent,
         ownerAuth: { signature },
+        // Phase 6 (AI Assist): optional provenance. Not part of the EIP-191
+        // canonical message that was signed; pure pass-through.
+        ...(p.rawText ? { rawText: p.rawText } : {}),
+        ...(p.parserMeta ? { parserMeta: p.parserMeta } : {}),
       };
 
       const intent = await createIntent(body);

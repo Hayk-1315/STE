@@ -28,6 +28,7 @@
   "dependencies": {
     "@0x/contract-addresses": "8.13.0",
     "@0x/protocol-utils": "11.24.2",
+    "@anthropic-ai/sdk": "0.104.1",
     "@nestjs/common": "^11.1.8",
     "@nestjs/core": "^11.1.8",
     "@nestjs/platform-express": "^11.1.8",

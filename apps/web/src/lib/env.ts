@@ -23,6 +23,11 @@ const schema = z.object({
   // ACTIONS (create / cancel / execute) are disabled (read-only toast),
   // identical to how Market/Limit submit buttons behave today.
   NEXT_PUBLIC_SEA_ENABLED: z.enum(["true", "false"]).optional(),
+  // Phase 6 (AI Assist): gates the natural-language AI Assist box inside the
+  // Conditional tab. Independent of NEXT_PUBLIC_SEA_ENABLED. Defaults off; when
+  // off, the manual CMR/CL form is unaffected. Apply-to-form only fills inputs;
+  // creating an intent still goes through the existing signed flow.
+  NEXT_PUBLIC_SEA_AI_ENABLED: z.enum(["true", "false"]).optional(),
   NEXT_PUBLIC_READ_ONLY: z.enum(["true", "false"]).optional(),
   NEXT_PUBLIC_TAKER_FEE_BPS: z.string().regex(/^\d+$/).optional(),
   NEXT_PUBLIC_TAKER_FEE_RECIPIENT: z
@@ -45,6 +50,7 @@ export function env(): Env {
     NEXT_PUBLIC_ZEROEX_EXCHANGE_PROXY: process.env.NEXT_PUBLIC_ZEROEX_EXCHANGE_PROXY,
     NEXT_PUBLIC_PROFILE: process.env.NEXT_PUBLIC_PROFILE,
     NEXT_PUBLIC_SEA_ENABLED: process.env.NEXT_PUBLIC_SEA_ENABLED,
+    NEXT_PUBLIC_SEA_AI_ENABLED: process.env.NEXT_PUBLIC_SEA_AI_ENABLED,
     NEXT_PUBLIC_READ_ONLY: process.env.NEXT_PUBLIC_READ_ONLY,
     NEXT_PUBLIC_TAKER_FEE_BPS: process.env.NEXT_PUBLIC_TAKER_FEE_BPS,
     NEXT_PUBLIC_TAKER_FEE_RECIPIENT: process.env.NEXT_PUBLIC_TAKER_FEE_RECIPIENT,

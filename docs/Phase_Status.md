@@ -35,7 +35,7 @@ Compact snapshot of what is shipped vs pending. Lives next to [CLAUDE.md](../CLA
 
 ## Pending
 
-- AI / NL layer for the Smart Execution Assistant — out of current scope; planned as a layer **on top** of the deterministic core, not a replacement.
+- AI / NL layer for the Smart Execution Assistant — **Phase 1A/1B shipped behind flags** (`SEA_AI_ENABLED` api, `NEXT_PUBLIC_SEA_AI_ENABLED` web): stateless `POST /sea/ai/parse` (LLM = extractor only; deterministic validator authoritative; no auto-execution; no DB conversation store) + AI Assist "Apply to form" in the Conditional tab, layered on the deterministic core. Automated checks pass (api `test -- sea` = 226, api typecheck/lint, web typecheck/lint/build, `format:check`). **Manual Sepolia browser/wallet/provider QA still pending.** Phase 2 (deterministic "why waiting/ready/rejected" explanations) optional/later.
 - Vercel / Render redeploy with env mirroring (Sepolia + mainnet read-only).
 - Final on-chain QA with a non-throttled RPC quota (Alchemy free tier has blocked end-to-end CMR EXECUTING → EXECUTED runs).
 - Optional hardening: structured tx-failure taxonomy on FillWatcher FAILED, richer SEA error toasts, audit-log row for each wallet-lock issuance.
