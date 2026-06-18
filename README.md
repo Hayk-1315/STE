@@ -9,6 +9,7 @@ End-to-end hybrid DEX architecture:
 - WebSocket streams for order book, trades and orders
 - Event watchers for on-chain fills & cancels reconciliation
 - Smart Intents (SEA): conditional execution layer on top of the core engine
+- AI Assist (optional, behind flags): natural-language helper for conditional intents, with deterministic validation authoritative
 - Prometheus metrics and Grafana dashboard
 
 This project is a serious prototype of a hybrid DEX architecture: off-chain matching with on-chain settlement, a unified trading surface (Market / Limit / Conditional), and an advanced conditional-execution layer (Smart Intents) built on top of the deterministic core. It models realistic system behavior and key architectural decisions, validated through targeted automated testing.
@@ -21,12 +22,13 @@ This project is a serious prototype of a hybrid DEX architecture: off-chain matc
 - **Limit (maker)** – create limit orders with tick-level precision and rule validation, signed client-side (EIP-712) and placed off-chain; supports marketable-limit caps.
 - **Market (taker)** – request quote (optional), approve, execute through 0x, with allowance validation and gas pre-checks; fills reconciled via watchers.
 - **Smart Intents (SEA)** – conditional workflows: Conditional Limit (CL) places a pre-signed passive order when a trigger fires; Conditional Market Ready (CMR) arms a market execution when the trigger and full-size liquidity are met. Execution always requires manual wallet confirmation; the backend monitors and validates but never holds keys or settles autonomously.
+- **AI Assist (optional)** – a natural-language helper that previews a CMR/CL draft to apply to the manual form; deterministic validation stays authoritative and it never signs or executes.
 - **Orderbook & Trades** – real-time top-10 order book with per-level timestamps and a recent trades stream.
 - **Orders** – live order lifecycle (placed / partial / filled / cancelled / expired).
 - **Smart Intents panel** – active intents with a history view for terminal/placed rows.
 - **Balances & Allowances** – per-token balances with granular allowance management (enable / custom / revoke).
 - **Cancel orders** – advanced controls (pair-wide cancel and single order-hash cancel), collapsed by default.
-- **Profiles** – Base mainnet read-only demo and Ethereum Sepolia interactive.
+- **Profiles** – Base mainnet read-only and Ethereum Sepolia interactive.
 - **Metrics** – WS broadcasts/subscribers, tick loop p95 latency, orders/quotes/fills/cancels.
 
 ---
@@ -116,6 +118,7 @@ user wallet to the 0x Exchange Proxy (not via backend)
 - **WebSocket layer** streams real-time updates for orderbook, trades, and user orders.
 - **API (NestJS)** performs off-chain matching using an in-memory order book (LOB) and enforces trading rules.
 - **SEA monitor** evaluates Smart Intent triggers and readiness (CL / CMR) without holding keys or settling autonomously.
+- **SEA AI Assist (optional)** turns natural language into a restricted Conditional-tab draft; deterministic validation stays the source of truth and it never signs or executes.
 - **Postgres** persists orders (raw + derived state), trades, events, and intents for recovery and reconciliation.
 - **0x Exchange Proxy** is used strictly for on-chain settlement (fills and cancels).
 - **Watchers (JSON-RPC)** listen to on-chain events and reconcile backend state with blockchain activity.
@@ -138,6 +141,8 @@ user wallet to the 0x Exchange Proxy (not via backend)
 
 ### B. Smart Intents (SEA)
 
+Conditional intents can be set up manually or previewed with the optional AI Assist layer; either way the steps below are identical and deterministic validation stays authoritative.
+
 - **Conditional Limit (CL)** – the user pre-signs a passive 0x limit order; the backend validates and stores the intent; the monitor watches the trigger; when it fires and the order can still rest safely, the signed order is placed into the normal orderbook. Once placed, the underlying Order is managed through the normal Orders flow.
 - **Conditional Market Ready (CMR)** – the backend monitors trigger and liquidity; READY requires the full requested size to be fillable at or better than the trigger; the user manually executes; a wallet-lock / execution token protects the execution window; the intent moves EXECUTING → EXECUTED or FAILED via watcher/sweeper reconciliation.
 
@@ -155,7 +160,7 @@ user wallet to the 0x Exchange Proxy (not via backend)
 - **In-memory matching engine (LOB)** – matching is in-memory for speed and deterministic execution.
 - **WebSocket-first real-time layer** – orderbook, trades, and user orders are streamed, not polled.
 - **Event-driven reconciliation (watchers)** – backend reconciles on-chain fills/cancels via JSON-RPC.
-- **Multi-network profiles** – Base mainnet is a read-only demo; Sepolia exercises full execution.
+- **Multi-network profiles** – Base mainnet is read-only; Sepolia exercises full execution.
 - **Single-node architecture (v1)** – matching engine, API, and WebSocket gateway run in one service.
 
 ---
@@ -179,7 +184,8 @@ user wallet to the 0x Exchange Proxy (not via backend)
 - RPC vars: Base Mainnet
 - markets.json: Mainnet token addresses
 - 0x addresses: Base Exchange Proxy / targets
-- `READ_ONLY=true`, `PROFILE=mainnet`: mutating endpoints, UI write actions, and watchers disabled
+- READ_ONLY=true and PROFILE=mainnet: mutating endpoints, UI write actions, and watchers disabled
+- AI Assist UI is display-only here: visible but non-interactive, with no API calls and no provider key required
 
 ### Ethereum Sepolia (Interactive)
 
@@ -187,18 +193,19 @@ user wallet to the 0x Exchange Proxy (not via backend)
 - markets.json: Sepolia token addresses
 - 0x addresses: Sepolia Exchange Proxy / targets
 - Trading enabled (approve / execute) and Smart Intents (CL / CMR) when SEA flags are configured
+- AI Assist is optional behind feature flags; live previews require the user's own Anthropic API key
 
 ### Markets configuration
 
 - Markets are defined in JSON files (mainnet vs sepolia).
-- The active set is selected by the environment profile (`CHAIN_ID` / `NEXT_PUBLIC_PROFILE`).
+- The active set is selected by the environment profile (CHAIN_ID / NEXT_PUBLIC_PROFILE).
 
 ### Fee Policy
 
 - Sepolia: taker fee is env-configured (recipient set via environment).
 - Base Mainnet (read-only): no transaction execution.
 
-> Configure profiles through environment variables such as `READ_ONLY`, `PROFILE` / `NEXT_PUBLIC_PROFILE`, `CHAIN_ID`, RPC URLs, and SEA flags. Do not commit secrets.
+> Configure profiles through environment variables such as READ_ONLY, PROFILE / NEXT_PUBLIC_PROFILE, CHAIN_ID, RPC URLs, and SEA flags. Do not commit secrets.
 
 ---
 
@@ -229,12 +236,11 @@ apps/api/.env.example        → apps/api/.env
 apps/web/.env.local.example  → apps/web/.env.local
 ```
 
-Open `apps/api/.env` and replace `YOUR_KEY` in the RPC URL with your Alchemy
+Open `apps/api/.env` and replace YOUR_KEY in the RPC URL with your Alchemy
 (or other provider) API key.
 
-> Real `.env` files are gitignored and must **not** be committed. They are
-> separate from the environment variables configured in Vercel / Render
-> dashboards.
+> Real .env files are gitignored and must not be committed. They are separate
+> from the environment variables configured in Vercel / Render dashboards.
 
 ### 4. Run API and Web
 
@@ -244,7 +250,7 @@ pnpm dev:stack:base
 
 This script applies the DB schema, wipes and re-seeds local market data, then
 starts API + Web. The profile is read-only: write actions and watchers are
-disabled.
+disabled. AI Assist appears as display-only here (no API key or calls).
 
 Open: http://localhost:3000
 
@@ -268,32 +274,31 @@ apps/web/.env.sepolia.local.example    → apps/web/.env.sepolia.local
 
 Open `apps/api/.env.sepolia` and set:
 
-- **`RPC_URL` / `RPC_URL_READONLY`** — replace `YOUR_KEY` with your Alchemy
+- RPC_URL / RPC_URL_READONLY — replace YOUR_KEY with your Alchemy
   (or other) Sepolia RPC key.
-- **`SEA_LOCK_NONCE_SECRET`** and **`SEA_EXECUTION_TOKEN_SECRET`** — generate
-  two distinct random values (e.g. `openssl rand -base64 32`). Both are required
-  for CMR wallet-lock; without them CMR execution fails at runtime.
-- **(Optional) `ANTHROPIC_API_KEY`** — only needed to run the AI Assist "Preview
+- SEA_LOCK_NONCE_SECRET and SEA_EXECUTION_TOKEN_SECRET — generate two
+  distinct random values (e.g. openssl rand -base64 32). Both are required for
+  CMR wallet-lock; without them CMR execution fails at runtime.
+- ANTHROPIC_API_KEY (optional) — only needed to run the AI Assist "Preview
   intent" locally. Add your own Anthropic key (server-side; the file is
   gitignored). Without it the AI Assist card shows an "unavailable" state and the
-  manual form works normally. API usage is billed to the key owner. See
+  manual form still works. API usage is billed to the key owner. See
   [AI Assist](#ai-assist-smart-execution-assistant).
 
-The example file already sets `SEA_MONITOR_ENABLED=1`,
-`SEA_CMR_PREPARE_ENABLED=1`, and `DEV_ONCHAIN_WATCHER=1` for the full
-interactive experience. Set `DEV_ONCHAIN_WATCHER=0` if your RPC quota is
+The example file already sets SEA_MONITOR_ENABLED=1,
+SEA_CMR_PREPARE_ENABLED=1, and DEV_ONCHAIN_WATCHER=1 for the full
+interactive experience. Set DEV_ONCHAIN_WATCHER=0 if your RPC quota is
 limited and you want to skip on-chain reconciliation.
 
 Open `apps/web/.env.sepolia.local` and set:
 
-- **`NEXT_PUBLIC_RPC_URL`** — same Sepolia RPC key as above.
-- **`NEXT_PUBLIC_WEB3AUTH_CLIENT_ID`** — your Web3Auth client ID from
+- NEXT_PUBLIC_RPC_URL — same Sepolia RPC key as above.
+- NEXT_PUBLIC_WEB3AUTH_CLIENT_ID — your Web3Auth client ID from
   [console.web3auth.io](https://console.web3auth.io). Required for wallet
   connection; without it no wallet can connect.
 
-> Real `.env` files are gitignored and must **not** be committed. They are
-> separate from the environment variables configured in Vercel / Render
-> dashboards.
+> Real .env files are gitignored and must not be committed. They are separate
+> from the environment variables configured in Vercel / Render dashboards.
 
 ### 3. Run API and Web
 
@@ -301,7 +306,7 @@ Open `apps/web/.env.sepolia.local` and set:
 pnpm dev:stack:sepolia
 ```
 
-This script applies the DB schema, **wipes and re-seeds local market data**,
+This script applies the DB schema, wipes and re-seeds local market data,
 then starts API + Web. Smart Intents (CL / CMR) are active once the env values
 above are filled in.
 
@@ -400,18 +405,18 @@ Then:
 
 ## AI Assist (Smart Execution Assistant)
 
-A natural-language helper layered on top of the deterministic engine, inside the **Conditional** tab (CMR / CL). It is **behind feature flags and disabled by default**. The LLM is a restricted _extractor_; the deterministic engine stays the source of truth.
+A natural-language helper layered on top of the deterministic engine, inside the Conditional tab (CMR / CL). It is behind feature flags and disabled by default. The LLM is a restricted _extractor_; the deterministic engine stays the source of truth.
 
 **What Phase 1 does**
 
-- Natural-language input in the Conditional tab for both **Conditional Market Ready (CMR)** and **Conditional Limit (CL)**.
-- Extracts restricted, human-level fields only: **side, size, trigger price**, and **CL limit price** when applicable.
-- Asks a **clarification question** when a required field is missing or vague (e.g. "buy when it's cheap" → asks for a trigger price).
-- Returns **`unsupportedIntent`** for out-of-scope strategies (RSI, moving averages, news, forecasts, portfolio advice).
-- Generates the **summary and explainability copy** (what it means / what it does not guarantee / that you still confirm) from deterministic code.
-- Shows **factual notes** from deterministic rules (e.g. trigger already met; a CL limit that would cross the book; a CMR size below the minimum notional at the trigger price).
-- **Hints** when the text sounds like the other submode (e.g. a passive limit typed in the CMR tab) — it never auto-switches.
-- Fills the existing manual form **only after you click "Apply to form"**; nothing is created automatically.
+- Natural-language input in the Conditional tab for both Conditional Market Ready (CMR) and Conditional Limit (CL).
+- Extracts restricted, human-level fields only: side, size, trigger price, and CL limit price when applicable.
+- Asks a clarification question when a required field is missing or vague (e.g. "buy when it's cheap" → asks for a trigger price).
+- Returns an unsupported response for out-of-scope strategies (RSI, moving averages, news, forecasts, portfolio advice).
+- Generates the summary and explainability copy (what it means / what it does not guarantee / that you still confirm) from deterministic code.
+- Shows factual notes from deterministic rules (e.g. trigger already met; a CL limit that would cross the book; a CMR size below the minimum notional at the trigger price).
+- Hints when the text sounds like the other submode (e.g. a passive limit typed in the CMR tab) — it never auto-switches.
+- Fills the existing manual form only after you click "Apply to form"; nothing is created automatically.
 
 **What Phase 1 does not do**
 
@@ -432,28 +437,26 @@ user text
   → existing signed create flow
 ```
 
-The LLM only extracts **side, size, trigger price, and CL limit price**. Backend code derives the **reference price, trigger type, execution authority, and TIF / enforcement**, runs **tick / min-size / min-notional** checks, and produces **all user-facing copy**. You review, edit, and sign every transaction exactly like a manually-built intent.
+The LLM only extracts side, size, trigger price, and CL limit price. Backend code derives the reference price, trigger type, execution authority, and TIF / enforcement, runs tick / min-size / min-notional checks, and produces all user-facing copy. You review, edit, and sign every transaction exactly like a manually-built intent.
 
-**New environment variables**
+**Environment variables**
 
-| Variable                     | Side | Purpose                                                         |
-| ---------------------------- | ---- | --------------------------------------------------------------- |
-| `SEA_AI_ENABLED`             | API  | `1` enables `POST /sea/ai/parse`; `0`/absent → `aiUnavailable`. |
-| `ANTHROPIC_API_KEY`          | API  | Server-side only. Empty ⇒ AI unavailable. Never commit.         |
-| `SEA_AI_MODEL`               | API  | Optional model override; defaults to `claude-haiku-4-5`.        |
-| `NEXT_PUBLIC_SEA_AI_ENABLED` | Web  | `true` shows the AI Assist card.                                |
+| Variable                   | Side | Purpose                                                 |
+| -------------------------- | ---- | ------------------------------------------------------- |
+| SEA_AI_ENABLED             | API  | 1 enables POST /sea/ai/parse; 0/absent → aiUnavailable. |
+| ANTHROPIC_API_KEY          | API  | Server-side only. Empty ⇒ AI unavailable. Never commit. |
+| SEA_AI_MODEL               | API  | Optional model override; defaults to claude-haiku-4-5.  |
+| NEXT_PUBLIC_SEA_AI_ENABLED | Web  | true shows the AI Assist card.                          |
 
-**Cost** — a real `ANTHROPIC_API_KEY` means **paid Anthropic API usage billed to the key owner**, separate from any claude.ai Pro/Max subscription (a Pro plan does not cover API calls). Each "Preview intent" can make **one** Anthropic call when AI is fully enabled and a key is set.
+**Cost** — a real Anthropic API key means paid API usage billed to the key owner, separate from any claude.ai Pro/Max subscription (a Pro plan does not cover API calls). Each "Preview intent" can make one API call when AI is fully enabled and a key is set.
 
 **By profile**
 
-- **Base mainnet / read-only** — the card is **visible but display-only**: textarea, Preview, and Apply are disabled, the UI never calls `/sea/ai/parse`, and the backend needs no key — so there is **no Anthropic cost**.
-- **Local Sepolia** — optional/live: set `SEA_AI_ENABLED=1` and add your own `ANTHROPIC_API_KEY` to the gitignored `apps/api/.env.sepolia`; API usage is billed to you.
-- **Deployed Sepolia** — `/sea/ai/parse` is unauthenticated and unthrottled, so keep AI **disabled by default** (`SEA_AI_ENABLED=0`). Enable only for controlled QA, then turn it back off (`SEA_AI_ENABLED=0` / clear the key).
+- **Base mainnet / read-only** — the card is visible but display-only: the textarea, Preview, and Apply are disabled, the UI never calls the parse endpoint, and the backend needs no key, so there is no API cost.
+- **Local Sepolia** — optional and live: set SEA_AI_ENABLED=1 and add your own ANTHROPIC_API_KEY to the gitignored apps/api/.env.sepolia; API usage is billed to you.
+- **Deployed Sepolia** — the parse endpoint is unauthenticated and unthrottled, so keep AI disabled by default (SEA_AI_ENABLED=0). Enable only for controlled QA, then turn it back off (SEA_AI_ENABLED=0 / clear the key).
 
-**Phase 2 (optional, later)** — may add **deterministic explanations** for existing intents (why one is waiting / ready / rejected / not executable), based only on engine facts. It must **not** add auto-execution, advice, session keys, delegated execution, or chatbot behavior.
-
-It is not investment advice.
+**Phase 2 (optional, later)** — may add deterministic explanations for existing intents (why one is waiting / ready / rejected / not executable), based only on engine facts. It must not add auto-execution, advice, session keys, delegated execution, or chatbot behavior.
 
 ---
 
