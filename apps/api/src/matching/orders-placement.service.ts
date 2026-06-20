@@ -22,6 +22,7 @@ import { PersistenceRepository } from './persistence.repository';
 import { ShadowChecksService } from '../observability/shadow-checks.service';
 import { MetricsService } from '../observability/metrics.service';
 import { signatureToTuple } from './raw-order.util';
+import { isTransientRpcError } from '../onchain/rpc-transient.util';
 
 const pow10 = (n: number): bigint => {
   let r = 1n;
@@ -178,10 +179,26 @@ export class OrdersPlacementService {
         provider,
       );
 
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-      const onchain: bigint = await erc20.balanceOf(makerExpected);
+      let onchain: bigint | null = null;
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        onchain = await erc20.balanceOf(makerExpected);
+      } catch (e) {
+        // Phase RPC-1: a transient RPC/provider failure (429 / quota / timeout /
+        // capacity) must not 500 placement. Degrade to a warn-skip — consistent
+        // with the missing-RPC path above — and let off-chain placement proceed;
+        // on-chain settlement remains the authoritative balance check.
+        // Non-transient errors (bad ABI / address / config) are rethrown so real
+        // bugs stay visible.
+        if (!isTransientRpcError(e)) throw e;
+        console.warn(
+          `[orders] balance guard skipped: transient RPC error (${
+            e instanceof Error ? e.message : String(e)
+          })`,
+        );
+      }
 
-      if (openBase + sizeBase > onchain) {
+      if (onchain !== null && openBase + sizeBase > onchain) {
         throw new BadRequestException('maker_insufficient_free_balance');
       }
     }

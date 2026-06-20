@@ -15,6 +15,11 @@ import { JsonRpcProvider, Interface } from 'ethers';
 import type { ZeroExConfig } from '../zeroex/zeroex.config';
 import { MetricsService } from '../observability/metrics.service';
 import { CancelPairFloorRepository } from './cancel-pair-floor.repository';
+import {
+  Backoff,
+  isTransientRpcError,
+  resolveWatcherEnabled,
+} from './rpc-transient.util';
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve as pathResolve } from 'node:path';
@@ -145,6 +150,15 @@ export class CancelWatcherService implements OnModuleInit, OnModuleDestroy {
   // 100, clamped to [1, 500].
   private readonly maxBlocksPerTick: number;
 
+  // Phase RPC-1: poll interval knob + transient-error cooldown (mirrors
+  // FillWatcher) so a throttled RPC is not hammered every tick.
+  private readonly intervalMs: number;
+  private readonly backoff: Backoff;
+  private cooldownUntil = 0;
+  // Set when a transient RPC error at boot deferred cursor initialization to the
+  // first successful tick (so the persisted cursor is never reset while RPC is down).
+  private needsCursorInit = false;
+
   // Persisted cursor so on-chain cancels during API downtime are not silently
   // dropped across restarts. Symmetric with FillWatcher's cursor.
   private readonly cursorFile: string = pathResolve(
@@ -161,8 +175,12 @@ export class CancelWatcherService implements OnModuleInit, OnModuleDestroy {
     private readonly floorRepo: CancelPairFloorRepository,
     @Inject('ZEROEX_CONFIG') cfg: ZeroExConfig,
   ) {
-    // Sólo activa si DEV_ONCHAIN_WATCHER=1 (para no afectar producción)
-    this.enabled = (process.env.DEV_ONCHAIN_WATCHER ?? '') === '1';
+    // Independent gate (DEV_CANCEL_WATCHER) with backward-compatible fallback to
+    // the shared DEV_ONCHAIN_WATCHER. Default behavior is unchanged.
+    this.enabled = resolveWatcherEnabled(
+      process.env.DEV_CANCEL_WATCHER,
+      process.env.DEV_ONCHAIN_WATCHER,
+    );
 
     // Valida y guarda el RPC como string estricto
     const rpc: string =
@@ -188,6 +206,19 @@ export class CancelWatcherService implements OnModuleInit, OnModuleDestroy {
     const parsedMax =
       Number.isFinite(rawMax) && rawMax > 0 ? Math.floor(rawMax) : 100;
     this.maxBlocksPerTick = Math.min(500, Math.max(1, parsedMax));
+
+    // Poll cadence (ms). Default 2000, floored at 500. Unset = unchanged.
+    const rawInt = Number(process.env.CANCEL_WATCHER_INTERVAL_MS ?? 2000);
+    this.intervalMs =
+      Number.isFinite(rawInt) && rawInt > 0
+        ? Math.max(500, Math.floor(rawInt))
+        : 2000;
+
+    // Exponential backoff used only when a transient RPC error is detected.
+    this.backoff = new Backoff(
+      Number(process.env.WATCHER_RPC_BACKOFF_BASE_MS ?? 15000),
+      Number(process.env.WATCHER_RPC_BACKOFF_MAX_MS ?? 120000),
+    );
   }
 
   async onModuleInit(): Promise<void> {
@@ -196,19 +227,53 @@ export class CancelWatcherService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    let latest: number;
+    let latest: number | null = null;
     try {
       latest = await this.provider.getBlockNumber();
     } catch (e) {
-      // Symmetric with FillWatcher: a boot-time RPC failure must not silently
-      // crash the lifecycle hook and leave the system without cancel
-      // reconciliation. Log loudly and bail out without scheduling the tick.
-      this.log.error(
-        `boot_failed reason="${e instanceof Error ? e.message : String(e)}" — cancel reconciliation will NOT run`,
-      );
-      return;
+      if (isTransientRpcError(e)) {
+        // Self-heal: a throttled/unavailable RPC at boot must not leave the
+        // watcher permanently dead. Defer cursor initialization to the first
+        // successful tick (so the persisted cursor is never reset while RPC is
+        // down), start the timer in cooldown, and recover automatically.
+        this.needsCursorInit = true;
+        const ms = this.backoff.nextDelay();
+        this.cooldownUntil = Date.now() + ms;
+        this.log.warn(
+          `boot_degraded reason="${e instanceof Error ? e.message : String(e)}" — RPC quota/rate limit; deferring cursor init; will retry; cooldown=${ms}ms`,
+        );
+      } else {
+        // Symmetric with FillWatcher: a non-transient boot-time failure must not
+        // silently crash the lifecycle hook. Log loudly and bail without
+        // scheduling the tick (config errors stay loud).
+        this.log.error(
+          `boot_failed reason="${e instanceof Error ? e.message : String(e)}" — cancel reconciliation will NOT run`,
+        );
+        return;
+      }
     }
 
+    // Normal boot: initialize the cursor now. Degraded boot: skip — the first
+    // successful tick will call initCursorFrom().
+    if (latest !== null) {
+      this.initCursorFrom(latest);
+    }
+
+    this.timer = setInterval(() => {
+      void this.tick().catch((e: unknown) =>
+        this.log.error(e instanceof Error ? e.message : String(e)),
+      );
+    }, this.intervalMs);
+  }
+
+  onModuleDestroy(): void {
+    if (this.timer) clearInterval(this.timer);
+  }
+
+  // Resolve the starting cursor (persisted vs fresh-near-head) and emit the
+  // existing started / cursor_stale logs. Shared by normal boot and the
+  // deferred first-successful-tick path so log format is preserved verbatim.
+  private initCursorFrom(latest: number): void {
     const persisted = loadCursor(this.cursorFile);
     if (persisted && persisted <= latest) {
       // Resume exactly where the previous run left off so cancels emitted
@@ -238,16 +303,18 @@ export class CancelWatcherService implements OnModuleInit, OnModuleDestroy {
           `Delete ${this.cursorFile} and restart to resume fresh near head.`,
       );
     }
-
-    this.timer = setInterval(() => {
-      void this.tick().catch((e: unknown) =>
-        this.log.error(e instanceof Error ? e.message : String(e)),
-      );
-    }, 2000);
   }
 
-  onModuleDestroy(): void {
-    if (this.timer) clearInterval(this.timer);
+  // Pause the watcher after a transient RPC error: log once, set the cooldown,
+  // and never advance the cursor. Subsequent ticks return early until cooldown
+  // elapses, so a throttled provider is not hammered every interval.
+  private enterCooldown(e: unknown, block?: number): void {
+    const ms = this.backoff.nextDelay();
+    this.cooldownUntil = Date.now() + ms;
+    const where = block !== undefined ? `block=${block} ` : '';
+    this.log.warn(
+      `rpc_degraded ${where}reason="${e instanceof Error ? e.message : String(e)}" — RPC quota/rate limit exceeded; watcher paused; cursor not advanced; cooldown=${ms}ms`,
+    );
   }
 
   private toLimitOrder(o: DecodedOrder): ZxLimitOrder {
@@ -268,8 +335,33 @@ export class CancelWatcherService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async tick(): Promise<void> {
+    // Cooldown gate: while paused after a transient RPC error, make no RPC calls
+    // and emit no logs (avoids hammering / log spam during throttling).
+    if (Date.now() < this.cooldownUntil) return;
+
     const ep = this.addr.resolve().exchangeProxy.toLowerCase();
-    const latest = await this.provider.getBlockNumber();
+
+    let latest: number;
+    try {
+      latest = await this.provider.getBlockNumber();
+    } catch (e) {
+      if (isTransientRpcError(e)) {
+        this.enterCooldown(e);
+        return;
+      }
+      throw e; // non-transient: surface via the timer's .catch as before
+    }
+
+    // Deferred boot init (RPC was throttled at startup) — initialize the cursor
+    // on the first successful tick without ever resetting a persisted cursor.
+    if (this.needsCursorInit) {
+      this.initCursorFrom(latest);
+      this.needsCursorInit = false;
+    }
+
+    // First clean tick after any degradation resets the backoff.
+    this.backoff.reset();
+
     if (latest <= this.lastScanned) return;
 
     // Cap the per-tick batch so a long downtime catch-up does not pin the
@@ -287,11 +379,15 @@ export class CancelWatcherService implements OnModuleInit, OnModuleDestroy {
           true, // include full tx objects
         ]);
       } catch (e) {
-        // RPC error (e.g. Alchemy 429 / compute-units exceeded). The cursor is
-        // not advanced because we return before the end-of-tick assignment, so
-        // this block is retried on the next tick. Log loudly so operators can
-        // tell reconciliation is paused on throttling rather than silently
-        // stuck.
+        if (isTransientRpcError(e)) {
+          // Alchemy 429 / compute-units / capacity. Pause and retry the SAME
+          // block after cooldown. The cursor is not advanced because we return
+          // before the end-of-tick assignment.
+          this.enterCooldown(e, b);
+          return;
+        }
+        // Non-transient RPC error: preserve the existing behavior — log and
+        // retry on the next tick without advancing the cursor.
         this.log.warn(
           `block_fetch_failed block=${b} reason="${
             e instanceof Error ? e.message : String(e)

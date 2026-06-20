@@ -52,7 +52,7 @@ Concise record of what has been manually exercised, what is known-flaky, and wha
 
 ## Known caveats
 
-- Full CMR `EXECUTING → EXECUTED / tx_reverted` reconciliation requires a working RPC and `DEV_ONCHAIN_WATCHER=1`; the FillWatcher polls block ranges and Alchemy free-tier quota has repeatedly blocked end-to-end runs.
+- Full CMR `EXECUTING → EXECUTED / tx_reverted` reconciliation requires a working RPC and `DEV_ONCHAIN_WATCHER=1` (or `DEV_FILL_WATCHER=1`); the FillWatcher polls block ranges and Alchemy free-tier quota has repeatedly blocked end-to-end runs. Phase RPC-1 (2026-06-20) makes a 429 pause the watcher (cooldown/backoff, cursor not advanced) instead of hammering every tick, but does not raise the quota — a non-throttled RPC is still needed for the full lifecycle.
 - Stale EXECUTING sweeper has been exercised in unit tests; live behavior with real RPC is **Needs verification**.
 - Pre-patch DB rows from earlier phases (before Phase 4.x-b) may have null `executionToken` / `walletLockExpiresAt`; clean them with `clear-sea-intents-dev` before re-testing the lock flow.
 - `fok_insufficient_liquidity` can fire between wallet-lock and `/match/quote` on thin Sepolia books; the user has already paid one EIP-191 popup. Lock expires inside `SEA_WALLET_LOCK_SEC` and monitor re-arms — documented trade-off, not a bug.
