@@ -35,6 +35,13 @@ type WalletState = {
    */
   personalSignMessage: (message: string) => Promise<string>;
   getSigner: () => Promise<ethers.Signer>;
+  /**
+   * Phase 3b (delegated CMR): the raw EIP-1193 provider for the connected wallet
+   * (injected or Web3Auth), so viem / @biconomy/abstractjs can wrap it for Nexus
+   * SA owner userOps. Additive read-only accessor — it does NOT change any of the
+   * ethers-based signing methods above. Returns null when not connected.
+   */
+  getRawProvider: () => Eip1193Provider | null;
 };
 
 const Ctx = createContext<WalletState | null>(null);
@@ -198,6 +205,10 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     return providerRef.current.getSigner();
   }, []);
 
+  // Phase 3b: expose the raw EIP-1193 provider (already tracked for events) so a
+  // viem walletClient / abstractjs can wrap the connected wallet. Additive only.
+  const getRawProvider = useCallback(() => eip1193Ref.current, []);
+
   const signTypedData = useCallback(
     async (p: {
       domain: TypedDataDomain;
@@ -357,6 +368,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     personalSign,
     personalSignMessage,
     getSigner,
+    getRawProvider,
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

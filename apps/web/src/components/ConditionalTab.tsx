@@ -21,6 +21,8 @@ import { parsePriceScaled, parseSizeWei, validateLimitInput } from "@/lib/valida
 import type { IntentSide } from "@/lib/sea";
 import ConditionalAiAssist, { type AppliedDraft } from "@/components/ConditionalAiAssist";
 import { isAiAssistEnabled } from "@/lib/seaAi";
+import DelegatedCmrToggle from "@/components/DelegatedCmrToggle";
+import { isDelegatedEnabled } from "@/lib/delegated";
 
 /**
  * Phase 5 safety: exact tick-alignment check for a single price field. Reuses
@@ -118,6 +120,15 @@ export default function ConditionalTab({ market, readOnly, onCreated }: Props) {
   // detaches it). `aiEnabled` is independent of readOnly — Apply only fills
   // inputs; creating still goes through the existing signed flow.
   const aiEnabled = useMemo(() => isAiAssistEnabled(), []);
+  // Phase 3b: delegated CMR shell, default OFF. When off, the manual form below
+  // renders exactly as today (this flag short-circuits the mount).
+  const delegatedEnabled = useMemo(() => isDelegatedEnabled(), []);
+  // Tracks the DelegatedCmrToggle sub-mode. When "delegated" (only possible with
+  // the flag on + CMR), the manual CMR CTA/footer copy is hidden — the delegated
+  // panel provides its own CTA and the manual "you confirm at READY" copy would
+  // be misleading. Always "manual" when the flag is off (toggle unmounted).
+  const [delegatedMode, setDelegatedMode] = useState<"manual" | "delegated">("manual");
+  const delegatedActive = delegatedEnabled && subMode === "CMR" && delegatedMode === "delegated";
   const [aiApplied, setAiApplied] = useState<AppliedDraft | null>(null);
 
   const onApplyDraft = (d: AppliedDraft) => {
@@ -251,43 +262,13 @@ export default function ConditionalTab({ market, readOnly, onCreated }: Props) {
     }
   };
 
-  return (
-    <div className="space-y-3" data-testid="conditional-tab">
-      {/* CL / CMR sub-mode */}
-      <Segmented
-        value={subMode}
-        onChange={(v) => setSubMode(v as SubMode)}
-        options={[
-          { label: "Market when ready", value: "CMR" },
-          { label: "Passive limit on trigger", value: "CL" },
-        ]}
-        className="shadow-sm"
-      />
-
-      {/* Phase 6: AI Assist (above the manual form). Gated by
-          NEXT_PUBLIC_SEA_AI_ENABLED. A centered bridge line below the submode
-          pills introduces the two ways to create the same intent (AI Assist or
-          the manual form below). Apply only fills the fields below; the existing
-          Create button stays the only create path. Remounts per submode so its
-          state resets when switching CMR/CL. */}
-      {aiEnabled && market && (
-        <>
-          {/* Bridge: the two ways to create the same intent. */}
-          <p className="text-center text-xs font-medium text-neutral-400">
-            {subMode === "CMR"
-              ? "Describe a market-ready alert with AI, or fill the fields manually below."
-              : "Describe a passive limit trigger with AI, or fill the fields manually below."}
-          </p>
-          <ConditionalAiAssist
-            key={subMode}
-            market={market}
-            subMode={subMode}
-            readOnly={readOnly}
-            onApplyDraft={onApplyDraft}
-          />
-        </>
-      )}
-
+  // Shared CMR/CL form fields (Side / Size / Trigger / [CL limit] / Expiry).
+  // Extracted so delegated mode can render them between Smart Account Setup and
+  // the Create card (via DelegatedCmrToggle's `fields`), while manual/CL mode
+  // renders them standalone in their normal position. The CL-only block stays
+  // guarded by subMode, so the same fragment is correct in both places.
+  const formFields = (
+    <>
       {/* Side */}
       <Segmented
         value={side}
@@ -395,41 +376,120 @@ export default function ConditionalTab({ market, readOnly, onCreated }: Props) {
           })}
         </div>
       </div>
+    </>
+  );
 
-      {err && (
+  return (
+    <div className="space-y-3" data-testid="conditional-tab">
+      {/* CL / CMR sub-mode */}
+      <Segmented
+        value={subMode}
+        onChange={(v) => setSubMode(v as SubMode)}
+        options={[
+          { label: "Market when ready", value: "CMR" },
+          { label: "Passive limit on trigger", value: "CL" },
+        ]}
+        className="shadow-sm"
+      />
+
+      {/* Phase 6: AI Assist (above the manual form). Gated by
+          NEXT_PUBLIC_SEA_AI_ENABLED. A centered bridge line below the submode
+          pills introduces the two ways to create the same intent (AI Assist or
+          the manual form below). Apply only fills the fields below; the existing
+          Create button stays the only create path. Remounts per submode so its
+          state resets when switching CMR/CL. */}
+      {aiEnabled && market && (
+        <>
+          {/* Bridge: the two ways to create the same intent. */}
+          <p className="text-center text-xs font-medium text-neutral-400">
+            {subMode === "CMR"
+              ? "Describe a market-ready alert with AI, or fill the fields manually below."
+              : "Describe a passive limit trigger with AI, or fill the fields manually below."}
+          </p>
+          <ConditionalAiAssist
+            key={subMode}
+            market={market}
+            subMode={subMode}
+            readOnly={readOnly}
+            onApplyDraft={onApplyDraft}
+          />
+        </>
+      )}
+
+      {/* Phase 3b (Milestone 3C): delegated CMR opt-in — setup + grant + submit.
+          CMR-only, behind NEXT_PUBLIC_SEA_DELEGATED_ENABLED. Reuses the SAME
+          form fields as the manual submit below (via getSubmitParams); does not
+          touch the manual form itself or the Execute-now flow. */}
+      {delegatedEnabled && subMode === "CMR" && (
+        <DelegatedCmrToggle
+          market={market}
+          side={side}
+          getSubmitParams={() => {
+            if (!validation.ok) return null;
+            return {
+              sizeBaseHuman: sizeHuman,
+              triggerPriceHuman,
+              tif: cmrTif,
+              expiresAtUnix: Math.floor(Date.now() / 1000) + cmrExpirySec,
+            };
+          }}
+          onCreated={() => onCreated?.()}
+          onModeChange={setDelegatedMode}
+          fields={formFields}
+        />
+      )}
+
+      {/* Shared CMR/CL form fields. In delegated mode they render INSIDE the
+          delegated panel above (passed as `fields`), so the standalone copy here
+          is hidden to avoid duplication and to keep the natural order
+          explanation → setup → fields → create. */}
+      {!delegatedActive && formFields}
+
+      {!delegatedActive && err && (
         <div className="rounded-md border border-red-500/40 bg-red-500/5 px-3 py-2 text-xs text-red-100">
           {err}
         </div>
       )}
 
-      <Button
-        type="button"
-        onClick={onSubmit}
-        disabled={!canSubmit}
-        className="w-full"
-        title={readOnly ? "Read-only mode: SEA actions disabled" : !address ? "Connect wallet" : ""}
-      >
-        {readOnly
-          ? "Read-only mode"
-          : !address
-            ? "Connect wallet"
-            : busy
-              ? "Submitting…"
-              : subMode === "CL"
-                ? "Create trigger limit"
-                : "Create market-ready alert"}
-      </Button>
+      {/* Manual CMR/CL create path. Hidden while Delegated mode is selected: the
+          delegated panel above owns its own "Create delegated CMR" CTA (rendered
+          right under the shared fields), and this button's copy ("you confirm the
+          market tx yourself") would be misleading for delegated. In manual mode
+          (and always when the flag is off) this is unchanged. */}
+      {!delegatedActive && (
+        <>
+          <Button
+            type="button"
+            onClick={onSubmit}
+            disabled={!canSubmit}
+            className="w-full"
+            title={
+              readOnly ? "Read-only mode: SEA actions disabled" : !address ? "Connect wallet" : ""
+            }
+          >
+            {readOnly
+              ? "Read-only mode"
+              : !address
+                ? "Connect wallet"
+                : busy
+                  ? "Submitting…"
+                  : subMode === "CL"
+                    ? "Create trigger limit"
+                    : "Create market-ready alert"}
+          </Button>
 
-      {/* Phase 4.x UI polish: mode-aware footer copy. CL pre-signs a passive
-          limit and STE only places it if it still rests safely in the book;
-          CMR watches the trigger + liquidity and the user manually confirms
-          a fresh-quoted market tx. No auto-settlement, no relayer, no
-          backend custody in either case. */}
-      <p className="border-t border-neutral-800/60 pt-2 mt-1 text-[11px] leading-relaxed text-neutral-400">
-        {subMode === "CL"
-          ? "Pre-sign a passive limit. When the trigger is met, the engine places it only if it still rests safely in the book."
-          : "The engine watches the trigger and liquidity. When ready, you confirm the market tx yourself with a fresh quote."}
-      </p>
+          {/* Phase 4.x UI polish: mode-aware footer copy. CL pre-signs a passive
+              limit and STE only places it if it still rests safely in the book;
+              CMR watches the trigger + liquidity and the user manually confirms
+              a fresh-quoted market tx. No auto-settlement, no relayer, no
+              backend custody in either case. */}
+          <p className="border-t border-neutral-800/60 pt-2 mt-1 text-[11px] leading-relaxed text-neutral-400">
+            {subMode === "CL"
+              ? "Pre-sign a passive limit. When the trigger is met, the engine places it only if it still rests safely in the book."
+              : "The engine watches the trigger and liquidity. When ready, you confirm the market tx yourself with a fresh quote."}
+          </p>
+        </>
+      )}
     </div>
   );
 }

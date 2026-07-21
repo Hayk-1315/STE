@@ -29,6 +29,7 @@
     "@0x/contract-addresses": "8.13.0",
     "@0x/protocol-utils": "11.24.2",
     "@anthropic-ai/sdk": "0.104.1",
+    "@biconomy/abstractjs": "1.2.4",
     "@nestjs/common": "^11.1.8",
     "@nestjs/core": "^11.1.8",
     "@nestjs/platform-express": "^11.1.8",
@@ -44,6 +45,7 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "socket.io": "^4.8.1",
+    "viem": "2.54.3",
     "zod": "4.1.12"
   },
   "devDependencies": {

@@ -9,6 +9,7 @@ End-to-end hybrid DEX architecture:
 - WebSocket streams for order book, trades and orders
 - Event watchers for on-chain fills & cancels reconciliation
 - Smart Intents (SEA): conditional execution layer on top of the core engine
+- Delegated CMR (opt-in, Sepolia): a user-owned Nexus Smart Account executes a Conditional Market Ready intent at READY with no wallet popup, via Biconomy Smart Sessions; manual CMR stays the default
 - AI Assist (optional, behind flags): natural-language helper for conditional intents, with deterministic validation authoritative
 - Prometheus metrics and Grafana dashboard
 
@@ -21,7 +22,8 @@ This project is a serious prototype of a hybrid DEX architecture: off-chain matc
 - **Trading panel** – a single surface with Market, Limit, and Conditional modes, with quote, allowance, and gas/balance checks in one flow.
 - **Limit (maker)** – create limit orders with tick-level precision and rule validation, signed client-side (EIP-712) and placed off-chain; supports marketable-limit caps.
 - **Market (taker)** – request quote (optional), approve, execute through 0x, with allowance validation and gas pre-checks; fills reconciled via watchers.
-- **Smart Intents (SEA)** – conditional workflows: Conditional Limit (CL) places a pre-signed passive order when a trigger fires; Conditional Market Ready (CMR) arms a market execution when the trigger and full-size liquidity are met. Execution always requires manual wallet confirmation; the backend monitors and validates but never holds keys or settles autonomously.
+- **Smart Intents (SEA)** – conditional workflows: Conditional Limit (CL) places a pre-signed passive order when a trigger fires; Conditional Market Ready (CMR) arms a market execution when the trigger and full-size liquidity are met. By default, execution requires manual wallet confirmation; the backend monitors and validates but never holds user keys or settles autonomously.
+- **Delegated CMR (opt-in)** – for CMR only, a user-owned Nexus Smart Account can execute at READY without a wallet popup, authorized by a scoped, single-use Smart Session grant; the backend holds only a scoped session key, never the user key. Manual CMR stays the default and universal fallback.
 - **AI Assist (optional)** – a natural-language helper that previews a CMR/CL draft to apply to the manual form; deterministic validation stays authoritative and it never signs or executes.
 - **Orderbook & Trades** – real-time top-10 order book with per-level timestamps and a recent trades stream.
 - **Orders** – live order lifecycle (placed / partial / filled / cancelled / expired).
@@ -109,6 +111,11 @@ Short Loom demos explaining the full flow:
 
 > Note: transactions are sent directly from the
 user wallet to the 0x Exchange Proxy (not via backend)
+>
+> Delegated CMR (opt-in) adds a user-owned Nexus Smart Account (the 0x taker)
+> + a Smart Session grant (DelegationGrant), executed at READY by an in-API
+> DelegatedExecutorWorker; the resulting 0x Exchange Proxy fill is reconciled
+> back into the same orderbook / My Orders / Recent Trades as a manual fill.
 ```
 
 ### How it works
@@ -122,6 +129,7 @@ user wallet to the 0x Exchange Proxy (not via backend)
 - **Postgres** persists orders (raw + derived state), trades, events, and intents for recovery and reconciliation.
 - **0x Exchange Proxy** is used strictly for on-chain settlement (fills and cancels).
 - **Watchers (JSON-RPC)** listen to on-chain events and reconcile backend state with blockchain activity.
+- **Delegated CMR (opt-in)** – a user-owned Nexus Smart Account (0x taker) executes a CMR at READY via a scoped Smart Session grant (DelegationGrant); the in-API DelegatedExecutorWorker submits the fill userOp (scoped backend session key only), settles through the 0x Exchange Proxy, and a delegated post-fill reconciler feeds the fill into the same orderbook / My Orders / Recent Trades as a manual fill.
 
 ---
 
@@ -145,6 +153,7 @@ Conditional intents can be set up manually or previewed with the optional AI Ass
 
 - **Conditional Limit (CL)** – the user pre-signs a passive 0x limit order; the backend validates and stores the intent; the monitor watches the trigger; when it fires and the order can still rest safely, the signed order is placed into the normal orderbook. Once placed, the underlying Order is managed through the normal Orders flow.
 - **Conditional Market Ready (CMR)** – the backend monitors trigger and liquidity; READY requires the full requested size to be fillable at or better than the trigger; the user manually executes; a wallet-lock / execution token protects the execution window; the intent moves EXECUTING → EXECUTED or FAILED via watcher/sweeper reconciliation.
+- **Delegated CMR (opt-in, CMR only)** – same monitor/READY logic as manual CMR, but the taker is a user-owned Nexus Smart Account authorized by a scoped Biconomy Smart Session grant. At READY the in-API DelegatedExecutorWorker submits the fill userOp (scoped backend session key only — never the user key) with no wallet popup, provided STE-side policy checks pass; the fill settles via the 0x Exchange Proxy and a delegated post-fill reconciler feeds it into orderbook / Recent Trades / My Orders like a manual fill. Grants are single-use, expiry-bound, and target-bound to 0x fillLimitOrder; funds live in the Smart Account and the user can revoke or withdraw (escape hatch). Manual CMR stays the default fallback.
 
 ---
 
@@ -153,10 +162,10 @@ Conditional intents can be set up manually or previewed with the optional AI Ass
 - **Off-chain orderbook** – orders are matched off-chain for low latency and a CEX-like UX; the database persists state, it does not match.
 - **0x Exchange Proxy for settlement** – on-chain execution uses standardized, battle-tested settlement; no custom settlement contracts.
 - **Client-side EIP-712 signing** – orders are signed in the user's wallet; the backend never signs EIP-712 and never holds private keys.
-- **User-confirmed execution** – every on-chain action requires an explicit wallet confirmation; there is no autonomous settlement.
-- **Smart Intents are monitored workflows, not custody** – the SEA monitor evaluates triggers/readiness deterministically; it does not delegate keys or auto-execute.
+- **User-confirmed execution (default)** – every manual on-chain action requires an explicit wallet confirmation; there is no autonomous settlement. Opt-in Delegated CMR is the sole exception (see below), and only via a user-signed, scoped Smart Session grant.
+- **Smart Intents are monitored workflows, not custody** – the SEA monitor evaluates triggers/readiness deterministically and never holds user keys; manual intents auto-execute nothing. (Opt-in Delegated CMR adds scoped Smart-Session execution — see below.)
+- **Delegated CMR uses a Nexus Smart Account, not EIP-7702** – the opt-in delegated path routes CMR execution through a user-owned Nexus Smart Account authorized by a scoped, single-use, expiry- and target-bound Smart Session grant (0x fillLimitOrder only). EIP-7702 browser delegation is deferred: MetaMask / injected wallets could not dApp-drive authorization to the Nexus implementation. The backend holds only a scoped session/redeemer key — never the user key — and can execute at READY without a wallet popup if policy checks pass; the user can revoke and withdraw via an escape hatch.
 - **CMR uses fixed FOK in the UI** – CMR v1 means full requested size or no execution start.
-- **PLACED Smart Intents are UI-history** – once a CL is placed, the underlying normal Order takes over and is managed in the Orders panel.
 - **In-memory matching engine (LOB)** – matching is in-memory for speed and deterministic execution.
 - **WebSocket-first real-time layer** – orderbook, trades, and user orders are streamed, not polled.
 - **Event-driven reconciliation (watchers)** – backend reconciles on-chain fills/cancels via JSON-RPC.
@@ -185,6 +194,7 @@ Conditional intents can be set up manually or previewed with the optional AI Ass
 - markets.json: Mainnet token addresses
 - 0x addresses: Base Exchange Proxy / targets
 - READ_ONLY=true and PROFILE=mainnet: mutating endpoints, UI write actions, and watchers disabled
+- Delegated CMR writes are hard-disabled here (read-only profile), on both backend and UI
 - AI Assist UI is display-only here: visible but non-interactive, with no API calls and no provider key required
 
 ### Ethereum Sepolia (Interactive)
@@ -193,6 +203,7 @@ Conditional intents can be set up manually or previewed with the optional AI Ass
 - markets.json: Sepolia token addresses
 - 0x addresses: Sepolia Exchange Proxy / targets
 - Trading enabled (approve / execute) and Smart Intents (CL / CMR) when SEA flags are configured
+- Delegated CMR (Nexus Smart Account) is available behind delegated flags (default OFF), injected wallet only; see [Delegated CMR](#delegated-cmr-nexus-smart-account)
 - AI Assist is optional behind feature flags; live previews require the user's own Anthropic API key
 
 ### Markets configuration
@@ -313,6 +324,8 @@ above are filled in.
 Open: http://localhost:3000
 
 > Per-process launchers are also available: `pnpm dev:api:sepolia`, `pnpm dev:web:sepolia`, `pnpm dev:api:mainnet`, `pnpm dev:web:mainnet`.
+
+> Delegated CMR is opt-in and OFF by default — this QuickStart needs no delegated env. To QA it on Sepolia, enable the delegated flags (see [Delegated CMR](#delegated-cmr-nexus-smart-account)).
 
 ---
 
@@ -457,6 +470,27 @@ The LLM only extracts side, size, trigger price, and CL limit price. Backend cod
 - **Deployed Sepolia** — the parse endpoint is unauthenticated and unthrottled, so keep AI disabled by default (SEA_AI_ENABLED=0). Enable only for controlled QA, then turn it back off (SEA_AI_ENABLED=0 / clear the key).
 
 **Phase 2 (optional, later)** — may add deterministic explanations for existing intents (why one is waiting / ready / rejected / not executable), based only on engine facts. It must not add auto-execution, advice, session keys, delegated execution, or chatbot behavior.
+
+---
+
+## Delegated CMR (Nexus Smart Account)
+
+Opt-in, **CMR-only** delegated execution: a user-owned Nexus Smart Account executes a Conditional Market Ready intent at READY without a wallet popup, authorized by a scoped Biconomy Smart Session grant. Manual CMR remains the default and universal fallback. It is behind feature flags and disabled by default.
+
+**Model**
+
+- The user EOA owns a Nexus Smart Account; funds for delegated execution live in that account, which is the 0x taker.
+- The user signs a scoped Smart Session grant per delegated CMR — single-use, expiry-bound, and target-bound to 0x fillLimitOrder. The backend holds only a scoped session / redeemer key, never the user key.
+- At READY, the in-API DelegatedExecutorWorker submits the fill userOp with no wallet popup if STE-side policy checks pass; the confirmed fill is reconciled into orderbook / Recent Trades / My Orders exactly like a manual fill.
+- The user can revoke the grant and withdraw funds (base / quote / ETH) via the escape hatch at any time.
+- Nexus SA, not EIP-7702 — EIP-7702 browser delegation is deferred because MetaMask / injected wallets could not dApp-drive authorization to the Nexus implementation.
+
+**Scope & flags (default OFF)**
+
+- Sepolia QA supported; Base Mainnet stays read-only / hard-disabled for delegated writes (backend and UI).
+- No paymaster / sponsorship in v1 — the Smart Account pays its own gas.
+- Web3Auth delegated owner-userOp signing remains unproven / disabled; use an injected wallet (e.g. MetaMask).
+- Gated by delegated flags, default OFF unless explicitly enabled: API SEA_DELEGATED_ENABLED, SEA_DELEGATED_EXEC_ENABLED, SEA_DELEGATED_PROVIDER (biconomy for real QA), DELEGATION_SESSION_SIGNER_PK (scoped redeemer key, not a user key), optional DELEGATION_NEXUS_FACTORY / DELEGATION_FEE_BUFFER_BPS; Web NEXT_PUBLIC_SEA_DELEGATED_ENABLED. See the gitignored .env.sepolia examples for the full list.
 
 ---
 

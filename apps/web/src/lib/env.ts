@@ -28,6 +28,13 @@ const schema = z.object({
   // off, the manual CMR/CL form is unaffected. Apply-to-form only fills inputs;
   // creating an intent still goes through the existing signed flow.
   NEXT_PUBLIC_SEA_AI_ENABLED: z.enum(["true", "false"]).optional(),
+  // Phase 3b (delegated CMR): gates the OPT-IN Nexus Smart Account delegated
+  // execution UI inside the Conditional tab. Defaults off; when off, the manual
+  // CMR/CL form renders exactly as today. Independent of every other flag. Even
+  // when on, delegated mode only appears for wallets whose owner-userOp signing
+  // is proven (MetaMask/injected); Web3Auth stays disabled until tested, and the
+  // backend still hard-disables writes on base-mainnet / READ_ONLY.
+  NEXT_PUBLIC_SEA_DELEGATED_ENABLED: z.enum(["true", "false"]).optional(),
   NEXT_PUBLIC_READ_ONLY: z.enum(["true", "false"]).optional(),
   NEXT_PUBLIC_TAKER_FEE_BPS: z.string().regex(/^\d+$/).optional(),
   NEXT_PUBLIC_TAKER_FEE_RECIPIENT: z
@@ -51,6 +58,7 @@ export function env(): Env {
     NEXT_PUBLIC_PROFILE: process.env.NEXT_PUBLIC_PROFILE,
     NEXT_PUBLIC_SEA_ENABLED: process.env.NEXT_PUBLIC_SEA_ENABLED,
     NEXT_PUBLIC_SEA_AI_ENABLED: process.env.NEXT_PUBLIC_SEA_AI_ENABLED,
+    NEXT_PUBLIC_SEA_DELEGATED_ENABLED: process.env.NEXT_PUBLIC_SEA_DELEGATED_ENABLED,
     NEXT_PUBLIC_READ_ONLY: process.env.NEXT_PUBLIC_READ_ONLY,
     NEXT_PUBLIC_TAKER_FEE_BPS: process.env.NEXT_PUBLIC_TAKER_FEE_BPS,
     NEXT_PUBLIC_TAKER_FEE_RECIPIENT: process.env.NEXT_PUBLIC_TAKER_FEE_RECIPIENT,

@@ -581,8 +581,7 @@ export default function MarketPage() {
                   Smart intents
                 </CardTitle>
                 <p className="mt-1 text-xs text-neutral-500">
-                  Conditional intents you have created on this wallet. State updates via polling;
-                  manual wallet confirmation is required to execute.
+                  Conditional intents you have created on this wallet.
                 </p>
               </CardHeader>
               <CardContent>

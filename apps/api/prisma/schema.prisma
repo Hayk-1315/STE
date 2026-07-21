@@ -296,3 +296,96 @@ model CancelPairFloor {
   @@id([maker, makerToken, takerToken])
   @@index([maker])
 }
+
+// ----- Delegated CMR (Phase 1 scaffold) -----
+// Additive, fully disabled by default. Persists an opt-in, per-intent delegated
+// execution grant + an execution-attempt audit trail. Deliberately NOT related
+// to `Intent` via a Prisma relation (plain `intentId` string) so the existing
+// Intent model / manual-CMR logic stays byte-for-byte unchanged. Multi-profile
+// from day one: every row is chain/profile-scoped. `base-mainnet` rows are
+// implementation-ready but hard-disabled/read-only at runtime.
+//
+// NON-CUSTODIAL: `sessionKeyRef` is a NON-SECRET reference/label resolved from
+// config to a backend-held, policy-scoped session signer. It is NEVER a private
+// key and NEVER the user's key. No key material is stored in the database.
+
+enum DelegationAccountModel {
+  EIP7702 // preferred: EOA delegated to Nexus; funds stay in the EOA (0x taker)
+  NEXUS_SA // fallback: deployed Nexus smart account is the 0x taker
+}
+
+enum DelegationProviderKind {
+  MOCK // Phase 1 default: no live provider calls
+  BICONOMY // Smart Sessions + Nexus (wired in a later phase)
+}
+
+enum DelegationGrantStatus {
+  PENDING
+  ACTIVE
+  USED
+  REVOKED
+  EXPIRED
+  FAILED
+}
+
+enum DelegatedExecutionDecision {
+  VALIDATED // STE-side fresh-quote validation passed
+  REJECTED // STE-side validation refused (no submission)
+  SUBMITTED // executor submitted a userOp/tx (later phase)
+  CONFIRMED // settlement confirmed on-chain (later phase)
+  FAILED
+}
+
+model DelegationGrant {
+  id       String @id @default(cuid())
+  // 1:1 with a delegated CMR intent (no FK relation, on purpose — see header).
+  intentId String @unique
+  owner    String @db.VarChar(42)
+
+  // Chain/profile scoping from the first commit (multi-profile).
+  chainId Int
+  profile String // 'ethereum-sepolia' | 'base-mainnet'
+
+  accountModel DelegationAccountModel
+  provider     DelegationProviderKind @default(MOCK)
+
+  // Session identity + NON-SECRET reference to the backend-held session signer.
+  sessionKeyRef String?
+  permissionId  String?
+
+  // Policy bounds mirroring the on-chain session policy. STE-side fresh-quote
+  // validation remains the authoritative economic guard.
+  target           String   @db.VarChar(42) // 0x Exchange Proxy allowlist (single target)
+  functionSelector String   @db.VarChar(10) // e.g. 0xf6274f66 (fillLimitOrder)
+  spendToken       String   @db.VarChar(42) // taker token the cap applies to
+  spendCapQ        Decimal  @db.Decimal(78, 0) // max taker-token spend (base units)
+  usageLimit       Int      @default(1)
+  validUntil       DateTime
+
+  status    DelegationGrantStatus @default(PENDING)
+  revokedAt DateTime?
+  meta      Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([owner, status])
+  @@index([status, validUntil])
+  @@index([intentId])
+}
+
+model DelegatedExecutionAttempt {
+  id          BigInt                     @id @default(autoincrement())
+  intentId    String
+  grantId     String?
+  chainId     Int
+  profile     String
+  decision    DelegatedExecutionDecision
+  reason      String?
+  txHash      String?                    @db.VarChar(66)
+  providerRef String?
+  createdAt   DateTime                   @default(now())
+
+  @@index([intentId, createdAt])
+  @@index([grantId])
+}

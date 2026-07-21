@@ -15,6 +15,7 @@ import { ShadowChecksService } from './observability/shadow-checks.service';
 import { LobRehydratorService } from './matching/lob-rehydrator.service';
 import { ConfigModule } from '@nestjs/config';
 import { SeaModule } from './sea/sea.module';
+import { DelegatedModule } from './sea/delegated/delegated.module';
 import { CancelPairFloorModule } from './onchain/cancel-pair-floor.module';
 
 @Module({
@@ -30,6 +31,7 @@ import { CancelPairFloorModule } from './onchain/cancel-pair-floor.module';
     MetricsModule,
     CancelPairFloorModule, // Phase 3.x-b: on-chain cancelPair floor (global)
     SeaModule, // SEA v1 substrate (Phase 1)
+    DelegatedModule, // Delegated CMR scaffold (Phase 1; inert/disabled by default)
     ...(process.env.NODE_ENV !== 'production' ? [DevModule, EngineModule] : []), // /dev/*
   ],
 

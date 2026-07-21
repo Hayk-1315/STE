@@ -28,6 +28,18 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { txUrl } from "@/lib/explorer";
 import ReadyIntentRowActions from "./ReadyIntentRowActions";
+import DelegatedIntentRowActions from "./DelegatedIntentRowActions";
+import DelegatedPendingRowActions from "./DelegatedPendingRowActions";
+import {
+  getDelegatedGrants,
+  isDelegatedEnabled,
+  type DelegatedGrantSummary,
+} from "@/lib/delegated";
+import {
+  clearDelegatedPending,
+  usePendingDelegatedEntries,
+  type DelegatedPendingEntry,
+} from "@/lib/delegatedPending";
 
 type Props = {
   market: Market | null;
@@ -76,12 +88,24 @@ const REASON_COPY: Record<string, string> = {
 export default function IntentsPanel({ market, readOnly, hideHeading = false }: Props) {
   const { address } = useWallet();
   const { cancelById } = useSeaCreate();
+  // Intents whose delegated create flow started but whose grant is not yet ACTIVE
+  // (in-flight, or interrupted before finalize). Persisted, so it survives a
+  // reload — such an intent must render delegated/pending UI, never the manual
+  // "Execute now". Empty for manual intents and when the flag is off.
+  const pendingDelegated = usePendingDelegatedEntries();
 
   const [intents, setIntents] = useState<IntentDto[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const inFlight = useRef(false);
+  // Phase 3b (Milestone 3D): map intentId -> delegated grant, so a delegated
+  // intent renders DelegatedIntentRowActions instead of manual Execute-now.
+  // Only populated when the flag is on; empty otherwise (flag OFF => every row
+  // renders exactly as today via ReadyIntentRowActions).
+  const [delegatedGrants, setDelegatedGrants] = useState<Map<string, DelegatedGrantSummary>>(
+    new Map(),
+  );
 
   // Phase 5 safety: scope the visible list to the current market. SEA Intent
   // dtos store `marketId` as the Market UUID; comparing to `market.id` ensures
@@ -119,6 +143,21 @@ export default function IntentsPanel({ market, readOnly, hideHeading = false }: 
       const rows = await getIntents({ address, limit: 50 });
       setIntents(rows);
       setErr(null);
+      // Delegated grants (behind the flag, best-effort). A failure here (e.g.
+      // backend feature disabled => 403) leaves the map empty, so every intent
+      // renders as a normal manual row — never blocking the intents list.
+      if (isDelegatedEnabled()) {
+        try {
+          const grants = await getDelegatedGrants(address);
+          setDelegatedGrants(new Map(grants.map((g) => [g.intentId, g])));
+          // Once a grant is visible from the backend it drives the row; any
+          // leftover pending marker for it is stale — clear it so the pending
+          // ("authorization incomplete") UI never shows for a granted intent.
+          for (const g of grants) clearDelegatedPending(g.intentId);
+        } catch {
+          setDelegatedGrants(new Map());
+        }
+      }
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -194,6 +233,12 @@ export default function IntentsPanel({ market, readOnly, hideHeading = false }: 
         <div className="rounded-md border border-dashed border-neutral-700 bg-neutral-900/40 px-3 py-3 text-xs text-neutral-400">
           No Smart Intents on this market. Open the Conditional tab to create a trigger limit or
           market-ready alert.
+          {isDelegatedEnabled() && (
+            <span className="block">
+              Manual intents ask you to confirm the trade in your wallet at READY. Delegated intents
+              execute automatically from your Nexus Smart Account if policy checks pass.
+            </span>
+          )}
         </div>
       )}
 
@@ -206,6 +251,8 @@ export default function IntentsPanel({ market, readOnly, hideHeading = false }: 
             readOnly={readOnly}
             onCancel={onCancel}
             onAfterAction={hydrate}
+            delegatedGrant={delegatedGrants.get(intent.id) ?? null}
+            pendingEntry={pendingEntryFor(pendingDelegated, intent, address)}
           />
         ))}
       </ul>
@@ -241,18 +288,39 @@ export default function IntentsPanel({ market, readOnly, hideHeading = false }: 
 /* Row + helpers                                                              */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * The persisted delegated-pending entry for this intent, scoped to the current
+ * owner (defensive — the marker records owner + market). Null when there is no
+ * marker or it belongs to a different owner.
+ */
+function pendingEntryFor(
+  entries: ReadonlyMap<string, DelegatedPendingEntry>,
+  intent: IntentDto,
+  owner: string | null,
+): DelegatedPendingEntry | null {
+  const e = entries.get(intent.id);
+  if (!e) return null;
+  if (owner && e.owner !== owner.toLowerCase()) return null;
+  return e;
+}
+
 function IntentRow({
   intent,
   market,
   readOnly,
   onCancel,
   onAfterAction,
+  delegatedGrant,
+  pendingEntry = null,
 }: {
   intent: IntentDto;
   market: Market | null;
   readOnly: boolean;
   onCancel: (id: string) => void;
   onAfterAction: () => void;
+  delegatedGrant?: DelegatedGrantSummary | null;
+  /** Delegated create started, grant not yet ACTIVE — render delegated/pending. */
+  pendingEntry?: DelegatedPendingEntry | null;
 }) {
   const sizeHuman = useMemo(() => {
     if (!market) return intent.sizeBase;
@@ -366,13 +434,36 @@ function IntentRow({
         </div>
       </div>
 
-      {readyCmr && market && (
-        <ReadyIntentRowActions
+      {/* Delegated branch: a delegated intent uses delegated row actions and NEVER
+          the manual Execute-now. It is "delegated" if it has a grant OR a persisted
+          delegated-pending marker (create started, grant not yet ACTIVE — including
+          an interrupted authorization that survived a reload). The pending marker
+          closes the window where such an intent could otherwise flash a manual
+          "Execute now". Manual intents (no grant, not pending) render
+          ReadyIntentRowActions exactly as before. Flag OFF => grant map empty and
+          nothing pending => always the manual path. */}
+      {delegatedGrant ? (
+        <DelegatedIntentRowActions
           intent={intent}
-          market={market}
-          readOnly={readOnly}
+          grant={delegatedGrant}
           onAfterAction={onAfterAction}
         />
+      ) : pendingEntry ? (
+        <DelegatedPendingRowActions
+          intent={intent}
+          entry={pendingEntry}
+          onAfterAction={onAfterAction}
+        />
+      ) : (
+        readyCmr &&
+        market && (
+          <ReadyIntentRowActions
+            intent={intent}
+            market={market}
+            readOnly={readOnly}
+            onAfterAction={onAfterAction}
+          />
+        )
       )}
 
       {placedCl && intent.linkedOrderHash && (
