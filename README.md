@@ -59,20 +59,12 @@ https://ste-websepolia.vercel.app
 
 ---
 
-## Video Walkthroughs
+## Video Walkthrough
 
-Short Loom demos explaining the full flow:
+Short Loom demo showing the current delegated CMR flow:
 
-1. Base Mainnet read-only tour
-   - https://www.loom.com/share/8dfb8933950744c8b8878a5b0227465a
-2. Maker flow (place / approve / cancel)
-   - https://www.loom.com/share/3bcea1ac76a546f1816d3c0ec638827a
-3. Taker flow (quote / approve / execute)
-   - https://www.loom.com/share/e495d9d8cc2e42d59b8ba7434fc2108e
-4. Multifill (sequential txs)
-   - https://www.loom.com/share/3c0adc118c954515be268935c04f106c
-5. Partial fill
-   - https://www.loom.com/share/5b6dc4691fc3427b99e05f3f439f4e5e
+- Delegated Conditional Market Ready Exchange Flow
+  https://www.loom.com/share/d50174ad689249fa8c2844901a2c789b
 
 ---
 
